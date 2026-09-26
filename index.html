@@ -13,6 +13,11 @@
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
         .grab-green { background-color: #00B14F; }
         .grab-text-green { color: #00B14F; }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        .animate-fade-in { animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
     </style>
 
     <!-- Firebase SDK Modular (v10) -->
@@ -39,6 +44,35 @@
         let menuList = [];
         let keranjang = {}; 
         let kategoriAktif = 'Semua';
+
+        // Custom Toast Pop-up Elegan (Pengganti Alert Default)
+        window.showNotice = function(pesan, tipe = 'warning', judul = 'Informasi') {
+            const modal = document.getElementById('noticeModal');
+            const iconContainer = document.getElementById('noticeIcon');
+            const titleEl = document.getElementById('noticeTitle');
+            const messageEl = document.getElementById('noticeMessage');
+
+            titleEl.innerText = judul;
+            messageEl.innerText = pesan;
+
+            if (tipe === 'success') {
+                iconContainer.className = "w-12 h-12 rounded-full bg-green-100 text-green-600 flex items-center justify-center mx-auto mb-3";
+                iconContainer.innerHTML = `<i data-lucide="check-circle-2" class="w-7 h-7"></i>`;
+            } else if (tipe === 'danger') {
+                iconContainer.className = "w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto mb-3";
+                iconContainer.innerHTML = `<i data-lucide="alert-circle" class="w-7 h-7"></i>`;
+            } else {
+                iconContainer.className = "w-12 h-12 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center mx-auto mb-3";
+                iconContainer.innerHTML = `<i data-lucide="info" class="w-7 h-7"></i>`;
+            }
+
+            modal.classList.remove('hidden');
+            lucide.createIcons();
+        };
+
+        window.closeNotice = function() {
+            document.getElementById('noticeModal').classList.add('hidden');
+        };
 
         // Load Kategori Realtime
         onSnapshot(collection(db, "categories"), (snapshot) => {
@@ -79,13 +113,11 @@
             renderMenu();
         };
 
-        // Fetch Menu Realtime
+        // Fetch Semua Menu (Produk Habis Tetap Dimuat)
         onSnapshot(collection(db, "menus"), (snapshot) => {
             menuList = [];
             snapshot.forEach((docSnap) => {
-                if(docSnap.data().tersedia !== false) {
-                    menuList.push({ id: docSnap.id, ...docSnap.data() });
-                }
+                menuList.push({ id: docSnap.id, ...docSnap.data() });
             });
             renderMenu();
         });
@@ -114,21 +146,40 @@
 
             filtered.forEach(item => {
                 const qty = keranjang[item.id]?.jumlah || 0;
+                const isReady = item.tersedia !== false;
                 const defaultImg = "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=300&auto=format&fit=crop&q=80";
 
                 container.innerHTML += `
-                    <div class="bg-white rounded-2xl p-3 border border-gray-100 shadow-sm flex items-center justify-between space-x-3 hover:shadow-md transition">
-                        <img src="${item.fotoUrl || defaultImg}" alt="${item.nama}" class="w-20 h-20 rounded-xl object-cover flex-shrink-0 bg-gray-100 border">
+                    <div class="bg-white rounded-2xl p-3 border border-gray-100 shadow-sm flex items-center justify-between space-x-3 transition relative overflow-hidden ${!isReady ? 'bg-gray-50' : 'hover:shadow-md'}">
                         
+                        <!-- Thumbnail Image & Overlay jika Habis -->
+                        <div class="relative flex-shrink-0">
+                            <img src="${item.fotoUrl || defaultImg}" alt="${item.nama}" class="w-20 h-20 rounded-xl object-cover border bg-gray-100 ${!isReady ? 'grayscale opacity-60' : ''}">
+                            ${!isReady ? `
+                                <span class="absolute inset-0 bg-black/40 rounded-xl flex items-center justify-center text-[10px] font-extrabold text-white uppercase tracking-wider">
+                                    Habis
+                                </span>
+                            ` : ''}
+                        </div>
+                        
+                        <!-- Informasi Menu -->
                         <div class="flex-1 min-w-0">
-                            <h3 class="font-bold text-gray-800 text-sm truncate">${item.nama}</h3>
+                            <div class="flex items-center space-x-1">
+                                <h3 class="font-bold text-gray-800 text-sm truncate ${!isReady ? 'text-gray-400 line-through' : ''}">${item.nama}</h3>
+                            </div>
                             <p class="text-xs text-gray-400 line-clamp-1 mt-0.5">${item.deskripsi || 'Menu spesial pilihan khas kedai.'}</p>
-                            <p class="text-sm font-extrabold grab-text-green mt-1">Rp ${Number(item.harga).toLocaleString('id-ID')}</p>
+                            <p class="text-sm font-extrabold mt-1 ${!isReady ? 'text-gray-400' : 'grab-text-green'}">Rp ${Number(item.harga).toLocaleString('id-ID')}</p>
                         </div>
 
+                        <!-- Tombol Aksi (+ / Qty / Stok Habis) -->
                         <div class="flex flex-col items-end justify-between self-stretch">
                             <span class="text-[10px] font-semibold text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">${item.kategori || 'Umum'}</span>
-                            ${qty === 0 ? `
+                            
+                            ${!isReady ? `
+                                <button disabled class="bg-gray-200 text-gray-400 text-xs font-bold px-3 py-1.5 rounded-xl cursor-not-allowed">
+                                    Habis
+                                </button>
+                            ` : qty === 0 ? `
                                 <button onclick="tambahKeKeranjang('${item.id}')" class="grab-green text-white text-xs font-bold px-3.5 py-1.5 rounded-xl shadow-sm hover:opacity-90 transition">
                                     + Tambah
                                 </button>
@@ -149,7 +200,7 @@
 
         window.tambahKeKeranjang = function(id) {
             const item = menuList.find(m => m.id === id);
-            if(item) {
+            if(item && item.tersedia !== false) {
                 keranjang[id] = { ...item, jumlah: 1, catatan: "" };
                 renderMenu();
             }
@@ -220,10 +271,15 @@
             const nama = document.getElementById('namaPemesan').value.trim();
             const meja = document.getElementById('nomorMeja').value.trim();
 
-            if (!nama || !meja) return alert("Lengkapi Nama Pemesan & Nomor Meja terlebih dahulu!");
-            if (Object.keys(keranjang).length === 0) return alert("Keranjang belanja kosong!");
+            if (!nama || !meja) {
+                showNotice("Harap isi Nama Pemesan dan Nomor Meja terlebih dahulu!", "warning", "Lengkapi Data");
+                return;
+            }
+            if (Object.keys(keranjang).length === 0) {
+                showNotice("Keranjang belanjaan Anda masih kosong!", "warning", "Keranjang Kosong");
+                return;
+            }
 
-            // Ambil Pengaturan Dinamis dari Firestore Settings
             let nomorWaKasir = "6281234567890";
             let nomorWaOwner = "6289876543210";
             let fonnteToken = "";
@@ -264,7 +320,6 @@
             const noInvoice = "INV-" + Date.now().toString().slice(-6);
 
             try {
-                // 1. Simpan Ke Firestore
                 await addDoc(collection(db, "orders"), {
                     no_invoice: noInvoice,
                     nama_pemesan: nama,
@@ -277,7 +332,6 @@
 
                 const pesanWA = `🔔 *PESANAN BARU - KEDAI*\n----------------------------------------\n*No. Invoice:* #${noInvoice}\n*Nama:* ${nama}\n*Meja / Tipe:* ${meja}\n\n*Detail Pesanan:*\n${detailPesananStr}\n----------------------------------------\n*Total Pembayaran:* Rp ${total.toLocaleString('id-ID')}\n*Status:* Menunggu Konfirmasi Kasir`;
 
-                // 2. Kirim Notif Gateway ke Owner jika token diisi
                 if (fonnteToken && fonnteToken !== "") {
                     fetch('https://api.fonnte.com/send', {
                         method: 'POST',
@@ -286,19 +340,22 @@
                     }).catch(err => console.error(err));
                 }
 
-                // 3. Open Direct WA ke Kasir
                 const urlWa = `https://wa.me/${nomorWaKasir}?text=${encodeURIComponent(pesanWA)}`;
-                window.open(urlWa, '_blank');
-
-                // Reset
+                
+                // Reset keranjang dan tampilkan pesan sukses elegan
                 keranjang = {};
                 tutupModalCheckout();
                 renderMenu();
-                alert("Pesanan berhasil dikirim!");
+
+                showNotice("Pesanan Anda telah berhasil dikirim! Silakan selesaikan pengiriman pesan di WhatsApp.", "success", "Pesanan Terkirim");
+
+                setTimeout(() => {
+                    window.open(urlWa, '_blank');
+                }, 1200);
 
             } catch (error) {
                 console.error("Error: ", error);
-                alert("Gagal memproses pesanan.");
+                showNotice("Terjadi kesalahan saat memproses pesanan. Silakan coba lagi.", "danger", "Gagal Mengirim");
             }
         };
 
@@ -409,6 +466,20 @@
                 </div>
                 <button onclick="prosesPesanan()" class="w-full grab-green text-white py-3.5 rounded-2xl font-bold text-xs shadow-lg hover:opacity-90 flex justify-center items-center gap-2">
                     <i data-lucide="send" class="w-4 h-4"></i> Kirim Pesanan via WhatsApp
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Modal Pop-up Notice (Elegan & Modern) -->
+    <div id="noticeModal" class="fixed inset-0 bg-black/60 z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-xs rounded-3xl p-5 text-center shadow-2xl animate-fade-in space-y-2">
+            <div id="noticeIcon"></div>
+            <h3 id="noticeTitle" class="font-extrabold text-base text-gray-800"></h3>
+            <p id="noticeMessage" class="text-xs text-gray-500 leading-relaxed px-2"></p>
+            <div class="pt-3">
+                <button onclick="closeNotice()" class="w-full grab-green text-white py-2.5 rounded-xl font-bold text-xs shadow hover:opacity-95 transition">
+                    Mengerti
                 </button>
             </div>
         </div>
