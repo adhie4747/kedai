@@ -3,11 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Superadmin - Kelola Menu, Kategori & Integrasi WA</title>
+    <title>Superadmin - Kelola Menu, Harga & Integrasi WA</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        .animate-fade-in { animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+    </style>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
@@ -29,11 +36,35 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // KONEKSI CLOUDINARY UNTUK UPLOAD FOTO GALERI (OPSIONAL / UNUNSIGNED PRESET)
+        // KONEKSI CLOUDINARY UNTUK UPLOAD FOTO GALERI
         const CLOUDINARY_CLOUD_NAME = "demo"; 
         const CLOUDINARY_UPLOAD_PRESET = "unsigned_preset"; 
 
         const settingsDocRef = doc(db, "settings", "config");
+        let activeEditMenuId = null;
+
+        // Custom Toast Pop-up Elegan (Pengganti Alert)
+        window.showNotice = function(pesan, tipe = 'success', judul = 'Informasi') {
+            const modal = document.getElementById('noticeModal');
+            const iconContainer = document.getElementById('noticeIcon');
+            document.getElementById('noticeTitle').innerText = judul;
+            document.getElementById('noticeMessage').innerText = pesan;
+
+            if (tipe === 'success') {
+                iconContainer.className = "w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-3";
+                iconContainer.innerHTML = `<i data-lucide="check-circle-2" class="w-7 h-7"></i>`;
+            } else {
+                iconContainer.className = "w-12 h-12 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center mx-auto mb-3";
+                iconContainer.innerHTML = `<i data-lucide="info" class="w-7 h-7"></i>`;
+            }
+
+            modal.classList.remove('hidden');
+            lucide.createIcons();
+        };
+
+        window.closeNotice = function() {
+            document.getElementById('noticeModal').classList.add('hidden');
+        };
 
         // 1. LOAD PENGATURAN SYSTEM
         async function loadSettings() {
@@ -57,7 +88,7 @@
             const fonnteToken = document.getElementById('settingFonnteToken').value.trim();
             const namaKedai = document.getElementById('settingNamaKedai').value.trim();
 
-            if (!waKasir) return alert("Nomor WA Kasir tidak boleh kosong!");
+            if (!waKasir) return showNotice("Nomor WA Kasir tidak boleh kosong!", "warning", "Gagal Simpan");
 
             try {
                 await setDoc(settingsDocRef, {
@@ -68,10 +99,10 @@
                     updatedAt: new Date()
                 }, { merge: true });
 
-                alert("✅ Pengaturan integrasi WhatsApp berhasil diperbarui!");
+                showNotice("Pengaturan WhatsApp berhasil disimpan!", "success", "Berhasil");
             } catch (err) {
-                console.error("Gagal menyimpan pengaturan:", err);
-                alert("Gagal menyimpan pengaturan.");
+                console.error(err);
+                showNotice("Gagal menyimpan pengaturan.", "warning", "Error");
             }
         };
 
@@ -113,7 +144,7 @@
             const namaKat = prompt("Masukkan Nama Kategori Baru:");
             if(namaKat && namaKat.trim() !== "") {
                 await addDoc(collection(db, "categories"), { nama: namaKat.trim() });
-                alert("Kategori berhasil ditambahkan!");
+                showNotice("Kategori baru berhasil ditambahkan!", "success", "Kategori Ditambah");
             }
         };
 
@@ -121,7 +152,7 @@
             const namaBaru = prompt("Ubah Nama Kategori:", namaLama);
             if(namaBaru && namaBaru.trim() !== "" && namaBaru !== namaLama) {
                 await updateDoc(doc(db, "categories", id), { nama: namaBaru.trim() });
-                alert("Kategori diperbarui!");
+                showNotice("Nama kategori telah diperbarui!", "success", "Kategori Diubah");
             }
         };
 
@@ -149,19 +180,14 @@
                 });
                 const data = await response.json();
                 document.getElementById('uploadProgress').classList.add('hidden');
-                
-                if (data.secure_url) {
-                    return data.secure_url;
-                } else {
-                    return null;
-                }
+                return data.secure_url || null;
             } catch (err) {
                 document.getElementById('uploadProgress').classList.add('hidden');
                 return null;
             }
         };
 
-        // 4. TAMBAH MENU
+        // 4. TAMBAH MENU BARU
         window.tambahMenu = async function() {
             const nama = document.getElementById('namaMenu').value.trim();
             const harga = Number(document.getElementById('hargaMenu').value);
@@ -169,7 +195,7 @@
             const urlManual = document.getElementById('fotoUrlManual').value.trim();
             const fileInput = document.getElementById('fotoGaleriInput');
 
-            if(!nama || !harga) return alert("Isi Nama & Harga Menu!");
+            if(!nama || !harga) return showNotice("Isi Nama & Harga Menu terlebih dahulu!", "warning", "Data Belum Lengkap");
 
             let fotoUrl = urlManual || "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=300";
 
@@ -191,7 +217,7 @@
             document.getElementById('fotoUrlManual').value = '';
             document.getElementById('fotoGaleriInput').value = '';
             document.getElementById('previewFoto').classList.add('hidden');
-            alert("Menu berhasil ditambahkan!");
+            showNotice("Menu makanan berhasil ditambahkan!", "success", "Menu Ditambah");
         };
 
         window.previewImage = function(input) {
@@ -206,7 +232,44 @@
             }
         };
 
-        // 5. LOAD REKAP OMSET REALTIME
+        // 5. FITUR EDIT HARGA & NAMA PRODUK
+        window.bukaModalEditMenu = function(id, namaLama, hargaLama) {
+            activeEditMenuId = id;
+            document.getElementById('editNamaMenuInput').value = namaLama;
+            document.getElementById('editHargaMenuInput').value = hargaLama;
+            document.getElementById('editMenuModal').classList.remove('hidden');
+        };
+
+        window.tutupModalEditMenu = function() {
+            activeEditMenuId = null;
+            document.getElementById('editMenuModal').classList.add('hidden');
+        };
+
+        window.simpanPerubahanMenu = async function() {
+            if(!activeEditMenuId) return;
+
+            const namaBaru = document.getElementById('editNamaMenuInput').value.trim();
+            const hargaBaru = Number(document.getElementById('editHargaMenuInput').value);
+
+            if(!namaBaru || !hargaBaru) {
+                return showNotice("Nama dan Harga tidak boleh kosong!", "warning", "Data Salah");
+            }
+
+            try {
+                await updateDoc(doc(db, "menus", activeEditMenuId), {
+                    nama: namaBaru,
+                    harga: hargaBaru
+                });
+
+                tutupModalEditMenu();
+                showNotice("Harga dan Nama produk berhasil diperbarui!", "success", "Update Berhasil");
+            } catch(e) {
+                console.error(e);
+                showNotice("Gagal memperbarui produk.", "warning", "Error");
+            }
+        };
+
+        // 6. LOAD REKAP OMSET REALTIME
         onSnapshot(collection(db, "orders"), (snapshot) => {
             let totalOmset = 0;
             let totalSelesai = 0;
@@ -227,7 +290,7 @@
             document.getElementById('totalPending').innerText = totalPending + " Menunggu";
         });
 
-        // 6. LOAD & MANAGE MENU
+        // 7. LOAD & MANAGE MENU (DENGAN TOMBOL EDIT HARGA)
         onSnapshot(collection(db, "menus"), (snapshot) => {
             const list = document.getElementById('menuListOwner');
             list.innerHTML = '';
@@ -244,11 +307,19 @@
                                 <p class="text-[10px] text-gray-400">${m.kategori} • <span class="font-bold text-emerald-600">Rp ${Number(m.harga).toLocaleString('id-ID')}</span></p>
                             </div>
                         </div>
-                        <div class="flex items-center space-x-2">
+                        <div class="flex items-center space-x-1.5">
+                            <!-- Tombol Edit Harga & Nama -->
+                            <button onclick="bukaModalEditMenu('${id}', '${m.nama.replace(/'/g, "\\'")}', ${m.harga})" class="bg-blue-50 text-blue-600 border border-blue-200 px-2.5 py-1 text-[10px] rounded-lg font-bold flex items-center gap-0.5 hover:bg-blue-100 transition">
+                                <i data-lucide="pencil" class="w-3 h-3"></i> Edit
+                            </button>
+
+                            <!-- Tombol Status Ready/Habis -->
                             <button onclick="toggleReady('${id}', ${!m.tersedia})" class="${m.tersedia !== false ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'} px-2.5 py-1 text-[10px] rounded-lg font-bold">
                                 ${m.tersedia !== false ? 'Ready' : 'Habis'}
                             </button>
-                            <button onclick="hapusMenu('${id}')" class="text-red-500 p-1">
+
+                            <!-- Tombol Hapus -->
+                            <button onclick="hapusMenu('${id}')" class="text-red-500 hover:text-red-700 p-1">
                                 <i data-lucide="trash-2" class="w-4 h-4"></i>
                             </button>
                         </div>
@@ -299,7 +370,7 @@
                 </div>
                 <div>
                     <h1 class="text-base font-extrabold text-gray-800">Superadmin Panel</h1>
-                    <p class="text-xs text-gray-400">Pusat Kelola Menu & Integrasi WhatsApp Kedai</p>
+                    <p class="text-xs text-gray-400">Pusat Kelola Menu, Harga & Integrasi WA</p>
                 </div>
             </div>
         </header>
@@ -420,5 +491,54 @@
         </div>
 
     </div>
+
+    <!-- Modal Edit Harga & Nama Produk Elegan -->
+    <div id="editMenuModal" class="fixed inset-0 bg-black/60 z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl animate-fade-in space-y-4">
+            <div class="flex justify-between items-center border-b pb-3">
+                <h3 class="font-extrabold text-sm text-gray-800 flex items-center gap-2">
+                    <i data-lucide="pencil" class="w-4 h-4 text-emerald-600"></i> Edit Produk
+                </h3>
+                <button onclick="tutupModalEditMenu()" class="text-gray-400 hover:text-gray-600">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-xs font-bold text-gray-600 mb-1">Nama Produk</label>
+                    <input type="text" id="editNamaMenuInput" class="w-full border border-gray-200 p-2.5 text-xs rounded-xl outline-none focus:ring-1 focus:ring-emerald-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-gray-600 mb-1">Harga Produk (Rp)</label>
+                    <input type="number" id="editHargaMenuInput" class="w-full border border-gray-200 p-2.5 text-xs rounded-xl outline-none focus:ring-1 focus:ring-emerald-500">
+                </div>
+            </div>
+
+            <div class="pt-2 flex space-x-2">
+                <button onclick="tutupModalEditMenu()" class="w-1/2 bg-gray-100 text-gray-600 py-2.5 rounded-xl font-bold text-xs hover:bg-gray-200 transition">
+                    Batal
+                </button>
+                <button onclick="simpanPerubahanMenu()" class="w-1/2 bg-emerald-600 text-white py-2.5 rounded-xl font-bold text-xs shadow hover:bg-emerald-700 transition">
+                    Simpan
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Modal Pop-up Notice (Elegan) -->
+    <div id="noticeModal" class="fixed inset-0 bg-black/60 z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-xs rounded-3xl p-5 text-center shadow-2xl animate-fade-in space-y-2">
+            <div id="noticeIcon"></div>
+            <h3 id="noticeTitle" class="font-extrabold text-base text-gray-800"></h3>
+            <p id="noticeMessage" class="text-xs text-gray-500 leading-relaxed px-2"></p>
+            <div class="pt-3">
+                <button onclick="closeNotice()" class="w-full bg-emerald-600 text-white py-2.5 rounded-xl font-bold text-xs shadow hover:opacity-95 transition">
+                    Mengerti
+                </button>
+            </div>
+        </div>
+    </div>
+
 </body>
 </html>
