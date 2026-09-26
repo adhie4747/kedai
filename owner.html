@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Superadmin - Kelola Menu, Kategori & Integrasi WA</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { 
+            getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc, updateDoc, setDoc, getDoc 
+        } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+        // FIREBASE CONFIG MILIK ANDA
+        const firebaseConfig = {
+            apiKey: "AIzaSyDbR7KdRXxBgV0XK0yDw9y62gZ5RQHWfxg",
+            authDomain: "kasir-e6c05.firebaseapp.com",
+            projectId: "kasir-e6c05",
+            storageBucket: "kasir-e6c05.firebasestorage.app",
+            messagingSenderId: "1033897386989",
+            appId: "1:1033897386989:web:ab40cc6aa75835ab94bde4",
+            measurementId: "G-829Q02ZSBL"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // KONEKSI CLOUDINARY UNTUK UPLOAD FOTO GALERI (OPSIONAL / UNUNSIGNED PRESET)
+        const CLOUDINARY_CLOUD_NAME = "demo"; 
+        const CLOUDINARY_UPLOAD_PRESET = "unsigned_preset"; 
+
+        const settingsDocRef = doc(db, "settings", "config");
+
+        // 1. LOAD PENGATURAN SYSTEM
+        async function loadSettings() {
+            try {
+                const docSnap = await getDoc(settingsDocRef);
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    document.getElementById('settingWaKasir').value = data.nomorWaKasir || '';
+                    document.getElementById('settingWaOwner').value = data.nomorWaOwner || '';
+                    document.getElementById('settingFonnteToken').value = data.fonnteToken || '';
+                    document.getElementById('settingNamaKedai').value = data.namaKedai || '';
+                }
+            } catch (err) {
+                console.error("Gagal memuat pengaturan:", err);
+            }
+        }
+
+        window.simpanPengaturan = async function() {
+            const waKasir = document.getElementById('settingWaKasir').value.trim();
+            const waOwner = document.getElementById('settingWaOwner').value.trim();
+            const fonnteToken = document.getElementById('settingFonnteToken').value.trim();
+            const namaKedai = document.getElementById('settingNamaKedai').value.trim();
+
+            if (!waKasir) return alert("Nomor WA Kasir tidak boleh kosong!");
+
+            try {
+                await setDoc(settingsDocRef, {
+                    nomorWaKasir: waKasir,
+                    nomorWaOwner: waOwner,
+                    fonnteToken: fonnteToken,
+                    namaKedai: namaKedai || "Kedai Food",
+                    updatedAt: new Date()
+                }, { merge: true });
+
+                alert("✅ Pengaturan integrasi WhatsApp berhasil diperbarui!");
+            } catch (err) {
+                console.error("Gagal menyimpan pengaturan:", err);
+                alert("Gagal menyimpan pengaturan.");
+            }
+        };
+
+        // 2. KELOLA KATEGORI REALTIME
+        onSnapshot(collection(db, "categories"), (snapshot) => {
+            const katSelect = document.getElementById('katMenu');
+            const listKatContainer = document.getElementById('categoryManageList');
+            
+            if(!katSelect || !listKatContainer) return;
+
+            katSelect.innerHTML = '';
+            listKatContainer.innerHTML = '';
+
+            if(snapshot.empty) {
+                const defaultKategori = ["Makanan", "Minuman", "Cemilan"];
+                defaultKategori.forEach(k => addDoc(collection(db, "categories"), { nama: k }));
+                return;
+            }
+
+            snapshot.forEach((docSnap) => {
+                const data = docSnap.data();
+                const id = docSnap.id;
+
+                katSelect.innerHTML += `<option value="${data.nama}">${data.nama}</option>`;
+
+                listKatContainer.innerHTML += `
+                    <div class="flex justify-between items-center p-2 bg-gray-50 border rounded-xl">
+                        <span class="text-xs font-bold text-gray-700">${data.nama}</span>
+                        <div class="space-x-1">
+                            <button onclick="editKategori('${id}', '${data.nama}')" class="text-blue-600 p-1 text-xs font-bold">Edit</button>
+                            <button onclick="hapusKategori('${id}')" class="text-red-500 p-1 text-xs font-bold">Hapus</button>
+                        </div>
+                    </div>
+                `;
+            });
+        });
+
+        window.tambahKategori = async function() {
+            const namaKat = prompt("Masukkan Nama Kategori Baru:");
+            if(namaKat && namaKat.trim() !== "") {
+                await addDoc(collection(db, "categories"), { nama: namaKat.trim() });
+                alert("Kategori berhasil ditambahkan!");
+            }
+        };
+
+        window.editKategori = async function(id, namaLama) {
+            const namaBaru = prompt("Ubah Nama Kategori:", namaLama);
+            if(namaBaru && namaBaru.trim() !== "" && namaBaru !== namaLama) {
+                await updateDoc(doc(db, "categories", id), { nama: namaBaru.trim() });
+                alert("Kategori diperbarui!");
+            }
+        };
+
+        window.hapusKategori = async function(id) {
+            if(confirm("Yakin ingin menghapus kategori ini?")) {
+                await deleteDoc(doc(db, "categories", id));
+            }
+        };
+
+        // 3. UPLOAD FOTO GALERI
+        window.uploadFotoGaleri = async function(fileInput) {
+            const file = fileInput.files[0];
+            if (!file) return null;
+
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
+
+            document.getElementById('uploadProgress').classList.remove('hidden');
+
+            try {
+                const response = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                document.getElementById('uploadProgress').classList.add('hidden');
+                
+                if (data.secure_url) {
+                    return data.secure_url;
+                } else {
+                    return null;
+                }
+            } catch (err) {
+                document.getElementById('uploadProgress').classList.add('hidden');
+                return null;
+            }
+        };
+
+        // 4. TAMBAH MENU
+        window.tambahMenu = async function() {
+            const nama = document.getElementById('namaMenu').value.trim();
+            const harga = Number(document.getElementById('hargaMenu').value);
+            const kategori = document.getElementById('katMenu').value;
+            const urlManual = document.getElementById('fotoUrlManual').value.trim();
+            const fileInput = document.getElementById('fotoGaleriInput');
+
+            if(!nama || !harga) return alert("Isi Nama & Harga Menu!");
+
+            let fotoUrl = urlManual || "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=300";
+
+            if(fileInput.files.length > 0) {
+                const urlUploaded = await uploadFotoGaleri(fileInput);
+                if(urlUploaded) fotoUrl = urlUploaded;
+            }
+
+            await addDoc(collection(db, "menus"), {
+                nama: nama,
+                harga: harga,
+                kategori: kategori,
+                fotoUrl: fotoUrl,
+                tersedia: true
+            });
+
+            document.getElementById('namaMenu').value = '';
+            document.getElementById('hargaMenu').value = '';
+            document.getElementById('fotoUrlManual').value = '';
+            document.getElementById('fotoGaleriInput').value = '';
+            document.getElementById('previewFoto').classList.add('hidden');
+            alert("Menu berhasil ditambahkan!");
+        };
+
+        window.previewImage = function(input) {
+            const preview = document.getElementById('previewFoto');
+            if (input.files && input.files[0]) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    preview.src = e.target.result;
+                    preview.classList.remove('hidden');
+                }
+                reader.readAsDataURL(input.files[0]);
+            }
+        };
+
+        // 5. LOAD REKAP OMSET REALTIME
+        onSnapshot(collection(db, "orders"), (snapshot) => {
+            let totalOmset = 0;
+            let totalSelesai = 0;
+            let totalPending = 0;
+
+            snapshot.forEach(docSnap => {
+                const d = docSnap.data();
+                if(d.status === "Selesai") {
+                    totalOmset += Number(d.total_harga || 0);
+                    totalSelesai++;
+                } else if(d.status === "Pending") {
+                    totalPending++;
+                }
+            });
+
+            document.getElementById('totalOmset').innerText = "Rp " + totalOmset.toLocaleString('id-ID');
+            document.getElementById('totalSelesai').innerText = totalSelesai + " Pesanan";
+            document.getElementById('totalPending').innerText = totalPending + " Menunggu";
+        });
+
+        // 6. LOAD & MANAGE MENU
+        onSnapshot(collection(db, "menus"), (snapshot) => {
+            const list = document.getElementById('menuListOwner');
+            list.innerHTML = '';
+
+            snapshot.forEach(docSnap => {
+                const m = docSnap.data();
+                const id = docSnap.id;
+                list.innerHTML += `
+                    <div class="flex justify-between items-center p-3 bg-white border border-gray-200 rounded-2xl shadow-sm">
+                        <div class="flex items-center space-x-3">
+                            <img src="${m.fotoUrl}" class="w-12 h-12 rounded-xl object-cover bg-gray-100 border">
+                            <div>
+                                <p class="font-bold text-xs text-gray-800">${m.nama}</p>
+                                <p class="text-[10px] text-gray-400">${m.kategori} • <span class="font-bold text-emerald-600">Rp ${Number(m.harga).toLocaleString('id-ID')}</span></p>
+                            </div>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <button onclick="toggleReady('${id}', ${!m.tersedia})" class="${m.tersedia !== false ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'} px-2.5 py-1 text-[10px] rounded-lg font-bold">
+                                ${m.tersedia !== false ? 'Ready' : 'Habis'}
+                            </button>
+                            <button onclick="hapusMenu('${id}')" class="text-red-500 p-1">
+                                <i data-lucide="trash-2" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            });
+            lucide.createIcons();
+        });
+
+        window.toggleReady = async function(id, status) {
+            await updateDoc(doc(db, "menus", id), { tersedia: status });
+        };
+
+        window.hapusMenu = async function(id) {
+            if(confirm("Hapus menu ini?")) await deleteDoc(doc(db, "menus", id));
+        };
+
+        window.switchTab = function(tabName) {
+            const tabMenu = document.getElementById('tabContentMenu');
+            const tabSettings = document.getElementById('tabContentSettings');
+            const btnTabMenu = document.getElementById('btnTabMenu');
+            const btnTabSettings = document.getElementById('btnTabSettings');
+
+            if(tabName === 'menu') {
+                tabMenu.classList.remove('hidden');
+                tabSettings.classList.add('hidden');
+                btnTabMenu.className = "px-4 py-2 text-xs font-bold rounded-xl bg-emerald-600 text-white shadow-sm";
+                btnTabSettings.className = "px-4 py-2 text-xs font-bold rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200";
+            } else {
+                tabMenu.classList.add('hidden');
+                tabSettings.classList.remove('hidden');
+                btnTabSettings.className = "px-4 py-2 text-xs font-bold rounded-xl bg-emerald-600 text-white shadow-sm";
+                btnTabMenu.className = "px-4 py-2 text-xs font-bold rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200";
+            }
+        };
+
+        loadSettings();
+    </script>
+</head>
+<body class="bg-gray-100 p-4 font-sans min-h-screen">
+    <div class="max-w-3xl mx-auto space-y-5">
+        
+        <!-- Header Dashboard -->
+        <header class="flex justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-200">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
+                    <i data-lucide="shield-check" class="w-5 h-5"></i>
+                </div>
+                <div>
+                    <h1 class="text-base font-extrabold text-gray-800">Superadmin Panel</h1>
+                    <p class="text-xs text-gray-400">Pusat Kelola Menu & Integrasi WhatsApp Kedai</p>
+                </div>
+            </div>
+        </header>
+
+        <!-- Stats Omset -->
+        <div class="grid grid-cols-3 gap-3">
+            <div class="bg-white p-3.5 rounded-2xl border shadow-sm">
+                <p class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Total Omset</p>
+                <p class="text-base font-extrabold text-emerald-600 mt-1" id="totalOmset">Rp 0</p>
+            </div>
+            <div class="bg-white p-3.5 rounded-2xl border shadow-sm">
+                <p class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Selesai</p>
+                <p class="text-base font-extrabold text-blue-600 mt-1" id="totalSelesai">0 Pesanan</p>
+            </div>
+            <div class="bg-white p-3.5 rounded-2xl border shadow-sm">
+                <p class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Antrean</p>
+                <p class="text-base font-extrabold text-amber-500 mt-1" id="totalPending">0 Menunggu</p>
+            </div>
+        </div>
+
+        <!-- Navigation Tabs -->
+        <div class="flex space-x-2 border-b pb-2">
+            <button id="btnTabMenu" onclick="switchTab('menu')" class="px-4 py-2 text-xs font-bold rounded-xl bg-emerald-600 text-white shadow-sm">
+                <i data-lucide="utensils" class="w-3.5 h-3.5 inline mr-1"></i> Kelola Menu & Kategori
+            </button>
+            <button id="btnTabSettings" onclick="switchTab('settings')" class="px-4 py-2 text-xs font-bold rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200">
+                <i data-lucide="settings" class="w-3.5 h-3.5 inline mr-1"></i> Pengaturan WA & Fonte
+            </button>
+        </div>
+
+        <!-- TAB 1: KELOLA MENU & KATEGORI -->
+        <div id="tabContentMenu" class="space-y-4">
+            
+            <!-- Kategori Management -->
+            <div class="bg-white p-4 rounded-2xl border shadow-sm space-y-3">
+                <div class="flex justify-between items-center">
+                    <h2 class="font-bold text-xs text-gray-700">Daftar Kategori Menu</h2>
+                    <button onclick="tambahKategori()" class="bg-emerald-600 text-white px-3 py-1 rounded-xl text-xs font-bold">+ Kategori Baru</button>
+                </div>
+                <div id="categoryManageList" class="grid grid-cols-2 md:grid-cols-3 gap-2"></div>
+            </div>
+
+            <!-- Tambah Menu -->
+            <div class="bg-white p-4 rounded-2xl border shadow-sm space-y-3">
+                <h2 class="font-bold text-xs text-gray-700 flex items-center gap-1">
+                    <i data-lucide="plus-circle" class="w-4 h-4 text-emerald-600"></i> Tambah Menu Baru
+                </h2>
+                <div class="space-y-2">
+                    <input type="text" id="namaMenu" placeholder="Nama Menu Makanan" class="w-full border p-2.5 text-xs rounded-xl outline-none">
+                    
+                    <div class="grid grid-cols-2 gap-2">
+                        <input type="number" id="hargaMenu" placeholder="Harga (Rp)" class="border p-2.5 text-xs rounded-xl outline-none">
+                        <select id="katMenu" class="border p-2.5 text-xs rounded-xl outline-none bg-white"></select>
+                    </div>
+
+                    <input type="text" id="fotoUrlManual" placeholder="URL Foto Web (Opsional)" class="w-full border p-2.5 text-xs rounded-xl outline-none">
+
+                    <!-- Upload Foto Galeri -->
+                    <div class="border-2 border-dashed border-gray-200 p-3 rounded-2xl text-center space-y-2 bg-gray-50">
+                        <p class="text-xs font-bold text-gray-600">Pilih Foto dari Galeri HP/PC</p>
+                        <input type="file" id="fotoGaleriInput" accept="image/*" onchange="previewImage(this)" class="text-xs text-gray-500 w-full">
+                        <img id="previewFoto" class="w-20 h-20 object-cover rounded-xl mx-auto border hidden">
+                        <p id="uploadProgress" class="text-xs text-emerald-600 font-bold hidden animate-pulse">Mengunggah foto...</p>
+                    </div>
+
+                    <button onclick="tambahMenu()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl text-xs transition shadow">
+                        Simpan Menu
+                    </button>
+                </div>
+            </div>
+
+            <!-- List Menu -->
+            <div class="space-y-2">
+                <h2 class="font-bold text-xs text-gray-700">Daftar Menu Aktif</h2>
+                <div id="menuListOwner" class="space-y-2"></div>
+            </div>
+        </div>
+
+        <!-- TAB 2: PENGATURAN INTEGRASI WA -->
+        <div id="tabContentSettings" class="space-y-4 hidden">
+            <div class="bg-white p-5 rounded-2xl border shadow-sm space-y-4">
+                <div>
+                    <h2 class="font-bold text-sm text-gray-800 flex items-center gap-2">
+                        <i data-lucide="message-square" class="w-4 h-4 text-emerald-600"></i> Pengaturan Integrasi WhatsApp
+                    </h2>
+                    <p class="text-xs text-gray-400 mt-1">Ubah nomor penerima pesanan dan token API Fonte tanpa perlu mengubah kode file.</p>
+                </div>
+
+                <div class="space-y-3 pt-2">
+                    <div>
+                        <label class="block text-xs font-bold text-gray-700 mb-1">Nama Kedai / Usaha</label>
+                        <input type="text" id="settingNamaKedai" placeholder="Contoh: Kedai Makanan Lezat" class="w-full border border-gray-200 p-2.5 text-xs rounded-xl outline-none focus:ring-1 focus:ring-emerald-500">
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-gray-700 mb-1">Nomor WhatsApp Kasir / Meja Pemesanan (Format 62)</label>
+                        <input type="text" id="settingWaKasir" placeholder="Contoh: 6281234567890" class="w-full border border-gray-200 p-2.5 text-xs rounded-xl outline-none focus:ring-1 focus:ring-emerald-500">
+                        <p class="text-[10px] text-gray-400 mt-0.5">Tujuan pesan wa.me saat pembeli menekan tombol checkout.</p>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-gray-700 mb-1">Nomor WhatsApp Owner / Notifikasi Dapur (Format 62)</label>
+                        <input type="text" id="settingWaOwner" placeholder="Contoh: 6289876543210" class="w-full border border-gray-200 p-2.5 text-xs rounded-xl outline-none focus:ring-1 focus:ring-emerald-500">
+                        <p class="text-[10px] text-gray-400 mt-0.5">Tujuan notifikasi background otomatis saat ada pesanan masuk.</p>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-gray-700 mb-1">Fonnte API Token (WA Gateway API)</label>
+                        <input type="password" id="settingFonnteToken" placeholder="Masukkan Token API Fonnte Anda" class="w-full border border-gray-200 p-2.5 text-xs rounded-xl outline-none focus:ring-1 focus:ring-emerald-500">
+                        <p class="text-[10px] text-gray-400 mt-0.5">Kosongkan jika hanya menggunakan wa.me direct link.</p>
+                    </div>
+                </div>
+
+                <button onclick="simpanPengaturan()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl text-xs transition shadow flex items-center justify-center gap-1">
+                    <i data-lucide="save" class="w-4 h-4"></i> Simpan Pengaturan Integrasi
+                </button>
+            </div>
+        </div>
+
+    </div>
+</body>
+</html>

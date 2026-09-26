@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kasir - Monitor Pesanan Kedai</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { 
+            getFirestore, collection, onSnapshot, doc, updateDoc, query, orderBy 
+        } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+        // FIREBASE CONFIG MILIK ANDA
+        const firebaseConfig = {
+            apiKey: "AIzaSyDbR7KdRXxBgV0XK0yDw9y62gZ5RQHWfxg",
+            authDomain: "kasir-e6c05.firebaseapp.com",
+            projectId: "kasir-e6c05",
+            storageBucket: "kasir-e6c05.firebasestorage.app",
+            messagingSenderId: "1033897386989",
+            appId: "1:1033897386989:web:ab40cc6aa75835ab94bde4",
+            measurementId: "G-829Q02ZSBL"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        const q = query(collection(db, "orders"), orderBy("createdAt", "desc"));
+
+        onSnapshot(q, (snapshot) => {
+            const container = document.getElementById('orderContainer');
+            container.innerHTML = '';
+
+            if(snapshot.empty) {
+                container.innerHTML = `<p class="text-gray-400 text-sm col-span-full text-center py-10">Belum ada pesanan masuk.</p>`;
+                return;
+            }
+
+            snapshot.forEach((docSnap) => {
+                const data = docSnap.data();
+                const id = docSnap.id;
+
+                let itemsHtml = '';
+                if(data.items) {
+                    data.items.forEach(it => {
+                        itemsHtml += `
+                            <li class="text-xs flex justify-between py-1 border-b border-gray-100 last:border-none">
+                                <div>
+                                    <span class="font-bold text-gray-800">${it.nama} (x${it.jumlah})</span>
+                                    ${it.catatan && it.catatan !== '-' ? `<p class="text-[10px] text-red-500 italic">Ket: ${it.catatan}</p>` : ''}
+                                </div>
+                                <span class="font-semibold text-gray-600">Rp ${Number(it.subtotal).toLocaleString('id-ID')}</span>
+                            </li>
+                        `;
+                    });
+                }
+
+                let badgeColor = "bg-yellow-100 text-yellow-800 border-yellow-200";
+                if(data.status === "Diproses") badgeColor = "bg-blue-100 text-blue-800 border-blue-200";
+                if(data.status === "Selesai") badgeColor = "bg-green-100 text-green-800 border-green-200";
+                if(data.status === "Dibatalkan") badgeColor = "bg-red-100 text-red-800 border-red-200";
+
+                container.innerHTML += `
+                    <div class="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm space-y-3 flex flex-col justify-between">
+                        <div>
+                            <div class="flex justify-between items-start border-b pb-2 mb-2">
+                                <div>
+                                    <h3 class="font-extrabold text-sm text-gray-800">#${data.no_invoice || id}</h3>
+                                    <p class="text-xs font-semibold text-gray-600 mt-0.5">${data.nama_pemesan} • <span class="text-green-600">${data.meja}</span></p>
+                                </div>
+                                <span class="px-2.5 py-1 text-[10px] font-bold rounded-full border ${badgeColor}">${data.status}</span>
+                            </div>
+                            <ul class="space-y-1 bg-gray-50 p-2.5 rounded-xl border border-gray-100">${itemsHtml}</ul>
+                        </div>
+
+                        <div class="pt-2 border-t mt-3 flex items-center justify-between">
+                            <div>
+                                <p class="text-[10px] text-gray-400">Total Tagihan</p>
+                                <p class="font-extrabold text-sm text-red-600">Rp ${Number(data.total_harga).toLocaleString('id-ID')}</p>
+                            </div>
+                            <div class="flex space-x-1">
+                                <button onclick="updateStatus('${id}', 'Diproses')" class="bg-blue-600 hover:bg-blue-700 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold transition">Proses</button>
+                                <button onclick="updateStatus('${id}', 'Selesai')" class="bg-green-600 hover:bg-green-700 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold transition">Selesai</button>
+                                <button onclick="updateStatus('${id}', 'Dibatalkan')" class="bg-red-500 hover:bg-red-600 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold transition">Batal</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            lucide.createIcons();
+        });
+
+        window.updateStatus = async function(id, statusBaru) {
+            await updateDoc(doc(db, "orders", id), { status: statusBaru });
+        };
+    </script>
+</head>
+<body class="bg-gray-100 p-4 font-sans min-h-screen">
+    <header class="max-w-5xl mx-auto flex justify-between items-center mb-6 bg-white p-4 rounded-2xl shadow-sm border border-gray-200">
+        <div class="flex items-center space-x-3">
+            <div class="w-10 h-10 rounded-xl bg-green-100 text-green-700 flex items-center justify-center font-bold">
+                <i data-lucide="monitor" class="w-5 h-5"></i>
+            </div>
+            <div>
+                <h1 class="text-base font-extrabold text-gray-800">Kasir POS - Monitor Pesanan</h1>
+                <p class="text-xs text-gray-400">Real-time order synchronization</p>
+            </div>
+        </div>
+        <span class="text-xs font-bold bg-green-500 text-white px-3 py-1 rounded-full animate-pulse flex items-center gap-1">
+            ● Live Connected
+        </span>
+    </header>
+
+    <main class="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="orderContainer">
+        <p class="text-gray-400 text-xs py-10 col-span-full text-center">Memuat transaksi masuk...</p>
+    </main>
+</body>
+</html>

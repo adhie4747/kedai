@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kedai Food - Pemesanan Online</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .grab-green { background-color: #00B14F; }
+        .grab-text-green { color: #00B14F; }
+    </style>
+
+    <!-- Firebase SDK Modular (v10) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { 
+            getFirestore, collection, addDoc, onSnapshot, serverTimestamp, doc, getDoc 
+        } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+        // FIREBASE CONFIG MILIK ANDA
+        const firebaseConfig = {
+            apiKey: "AIzaSyDbR7KdRXxBgV0XK0yDw9y62gZ5RQHWfxg",
+            authDomain: "kasir-e6c05.firebaseapp.com",
+            projectId: "kasir-e6c05",
+            storageBucket: "kasir-e6c05.firebasestorage.app",
+            messagingSenderId: "1033897386989",
+            appId: "1:1033897386989:web:ab40cc6aa75835ab94bde4",
+            measurementId: "G-829Q02ZSBL"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        let menuList = [];
+        let keranjang = {}; 
+        let kategoriAktif = 'Semua';
+
+        // Load Kategori Realtime
+        onSnapshot(collection(db, "categories"), (snapshot) => {
+            let categories = ['Semua'];
+            snapshot.forEach((docSnap) => {
+                categories.push(docSnap.data().nama);
+            });
+            renderCategoryTabs(categories);
+        });
+
+        function renderCategoryTabs(categories) {
+            const catContainer = document.getElementById('categoryTabs');
+            if(!catContainer) return;
+            catContainer.innerHTML = '';
+
+            categories.forEach(cat => {
+                const isSelected = cat === kategoriAktif;
+                catContainer.innerHTML += `
+                    <button onclick="setKategori('${cat}')" 
+                        class="px-4 py-2 text-xs font-bold rounded-full whitespace-nowrap transition-all ${
+                            isSelected 
+                            ? 'grab-green text-white shadow-sm' 
+                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }">
+                        ${cat}
+                    </button>
+                `;
+            });
+        }
+
+        window.setKategori = function(cat) {
+            kategoriAktif = cat;
+            onSnapshot(collection(db, "categories"), (snapshot) => {
+                let categories = ['Semua'];
+                snapshot.forEach((docSnap) => categories.push(docSnap.data().nama));
+                renderCategoryTabs(categories);
+            });
+            renderMenu();
+        };
+
+        // Fetch Menu Realtime
+        onSnapshot(collection(db, "menus"), (snapshot) => {
+            menuList = [];
+            snapshot.forEach((docSnap) => {
+                if(docSnap.data().tersedia !== false) {
+                    menuList.push({ id: docSnap.id, ...docSnap.data() });
+                }
+            });
+            renderMenu();
+        });
+
+        window.renderMenu = function() {
+            const container = document.getElementById('menuListContainer');
+            const searchInput = document.getElementById('searchMenu').value.toLowerCase();
+            container.innerHTML = '';
+
+            const filtered = menuList.filter(m => {
+                const matchCat = (kategoriAktif === 'Semua' || m.kategori === kategoriAktif);
+                const matchSearch = m.nama.toLowerCase().includes(searchInput);
+                return matchCat && matchSearch;
+            });
+
+            if(filtered.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-10 text-gray-400">
+                        <i data-lucide="utensils-crossed" class="w-12 h-12 mx-auto mb-2 stroke-1"></i>
+                        <p class="text-xs">Tidak ada menu yang sesuai</p>
+                    </div>
+                `;
+                lucide.createIcons();
+                return;
+            }
+
+            filtered.forEach(item => {
+                const qty = keranjang[item.id]?.jumlah || 0;
+                const defaultImg = "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=300&auto=format&fit=crop&q=80";
+
+                container.innerHTML += `
+                    <div class="bg-white rounded-2xl p-3 border border-gray-100 shadow-sm flex items-center justify-between space-x-3 hover:shadow-md transition">
+                        <img src="${item.fotoUrl || defaultImg}" alt="${item.nama}" class="w-20 h-20 rounded-xl object-cover flex-shrink-0 bg-gray-100 border">
+                        
+                        <div class="flex-1 min-w-0">
+                            <h3 class="font-bold text-gray-800 text-sm truncate">${item.nama}</h3>
+                            <p class="text-xs text-gray-400 line-clamp-1 mt-0.5">${item.deskripsi || 'Menu spesial pilihan khas kedai.'}</p>
+                            <p class="text-sm font-extrabold grab-text-green mt-1">Rp ${Number(item.harga).toLocaleString('id-ID')}</p>
+                        </div>
+
+                        <div class="flex flex-col items-end justify-between self-stretch">
+                            <span class="text-[10px] font-semibold text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">${item.kategori || 'Umum'}</span>
+                            ${qty === 0 ? `
+                                <button onclick="tambahKeKeranjang('${item.id}')" class="grab-green text-white text-xs font-bold px-3.5 py-1.5 rounded-xl shadow-sm hover:opacity-90 transition">
+                                    + Tambah
+                                </button>
+                            ` : `
+                                <div class="flex items-center space-x-2 bg-gray-100 rounded-xl p-1 border">
+                                    <button onclick="ubahJumlah('${item.id}', -1)" class="w-6 h-6 rounded-lg bg-white font-bold text-gray-700 shadow-sm flex items-center justify-center text-xs">-</button>
+                                    <span class="text-xs font-bold w-4 text-center">${qty}</span>
+                                    <button onclick="ubahJumlah('${item.id}', 1)" class="w-6 h-6 rounded-lg grab-green font-bold text-white shadow-sm flex items-center justify-center text-xs">+</button>
+                                </div>
+                            `}
+                        </div>
+                    </div>
+                `;
+            });
+            lucide.createIcons();
+            hitungTotal();
+        };
+
+        window.tambahKeKeranjang = function(id) {
+            const item = menuList.find(m => m.id === id);
+            if(item) {
+                keranjang[id] = { ...item, jumlah: 1, catatan: "" };
+                renderMenu();
+            }
+        };
+
+        window.ubahJumlah = function(id, delta) {
+            if (keranjang[id]) {
+                keranjang[id].jumlah += delta;
+                if (keranjang[id].jumlah <= 0) delete keranjang[id];
+            }
+            renderMenu();
+        };
+
+        function hitungTotal() {
+            let total = 0;
+            let totalItems = 0;
+            for (let id in keranjang) {
+                total += keranjang[id].harga * keranjang[id].jumlah;
+                totalItems += keranjang[id].jumlah;
+            }
+
+            const floatBar = document.getElementById('floatingCartBar');
+            if (totalItems > 0) {
+                floatBar.classList.remove('translate-y-full');
+                document.getElementById('cartBadge').innerText = totalItems;
+                document.getElementById('cartTotal').innerText = 'Rp ' + total.toLocaleString('id-ID');
+            } else {
+                floatBar.classList.add('translate-y-full');
+            }
+            return total;
+        }
+
+        window.bukaModalCheckout = function() {
+            const itemsList = document.getElementById('checkoutItemsList');
+            itemsList.innerHTML = '';
+            let total = 0;
+
+            for (let id in keranjang) {
+                const item = keranjang[id];
+                const subtotal = item.harga * item.jumlah;
+                total += subtotal;
+
+                itemsList.innerHTML += `
+                    <div class="flex justify-between items-start py-2.5 border-b border-gray-100">
+                        <div class="flex-1 pr-2">
+                            <p class="font-bold text-xs text-gray-800">${item.nama}</p>
+                            <p class="text-[11px] text-gray-500">${item.jumlah}x @ Rp ${item.harga.toLocaleString('id-ID')}</p>
+                            <input type="text" onchange="updateCatatan('${id}', this.value)" placeholder="Catatan (opsional: pedas/tanpa es)" value="${item.catatan || ''}" class="mt-1 text-[11px] border border-gray-200 rounded-lg p-1.5 w-full text-gray-600 focus:outline-none focus:ring-1 focus:ring-green-500 bg-gray-50">
+                        </div>
+                        <p class="font-bold text-xs text-gray-800">Rp ${subtotal.toLocaleString('id-ID')}</p>
+                    </div>
+                `;
+            }
+
+            document.getElementById('modalTotalHarga').innerText = 'Rp ' + total.toLocaleString('id-ID');
+            document.getElementById('checkoutModal').classList.remove('hidden');
+        };
+
+        window.tutupModalCheckout = function() {
+            document.getElementById('checkoutModal').classList.add('hidden');
+        };
+
+        window.updateCatatan = function(id, val) {
+            if(keranjang[id]) keranjang[id].catatan = val;
+        };
+
+        window.prosesPesanan = async function() {
+            const nama = document.getElementById('namaPemesan').value.trim();
+            const meja = document.getElementById('nomorMeja').value.trim();
+
+            if (!nama || !meja) return alert("Lengkapi Nama Pemesan & Nomor Meja terlebih dahulu!");
+            if (Object.keys(keranjang).length === 0) return alert("Keranjang belanja kosong!");
+
+            // Ambil Pengaturan Dinamis dari Firestore Settings
+            let nomorWaKasir = "6281234567890";
+            let nomorWaOwner = "6289876543210";
+            let fonnteToken = "";
+
+            try {
+                const docSnap = await getDoc(doc(db, "settings", "config"));
+                if (docSnap.exists()) {
+                    const cfg = docSnap.data();
+                    if(cfg.nomorWaKasir) nomorWaKasir = cfg.nomorWaKasir;
+                    if(cfg.nomorWaOwner) nomorWaOwner = cfg.nomorWaOwner;
+                    if(cfg.fonnteToken) fonnteToken = cfg.fonnteToken;
+                }
+            } catch(e) {
+                console.log("Pengaturan bawaan digunakan", e);
+            }
+
+            const itemsOrdered = [];
+            let detailPesananStr = "";
+            let total = 0;
+
+            for (let id in keranjang) {
+                const item = keranjang[id];
+                const subtotal = item.harga * item.jumlah;
+                total += subtotal;
+                
+                itemsOrdered.push({
+                    menu_id: id,
+                    nama: item.nama,
+                    harga: item.harga,
+                    jumlah: item.jumlah,
+                    catatan: item.catatan || "-",
+                    subtotal: subtotal
+                });
+
+                detailPesananStr += `• *${item.nama}* (${item.jumlah}x) = Rp ${subtotal.toLocaleString('id-ID')}\n  _Catatan: ${item.catatan || '-'}\n`;
+            }
+
+            const noInvoice = "INV-" + Date.now().toString().slice(-6);
+
+            try {
+                // 1. Simpan Ke Firestore
+                await addDoc(collection(db, "orders"), {
+                    no_invoice: noInvoice,
+                    nama_pemesan: nama,
+                    meja: meja,
+                    items: itemsOrdered,
+                    total_harga: total,
+                    status: "Pending",
+                    createdAt: serverTimestamp()
+                });
+
+                const pesanWA = `🔔 *PESANAN BARU - KEDAI*\n----------------------------------------\n*No. Invoice:* #${noInvoice}\n*Nama:* ${nama}\n*Meja / Tipe:* ${meja}\n\n*Detail Pesanan:*\n${detailPesananStr}\n----------------------------------------\n*Total Pembayaran:* Rp ${total.toLocaleString('id-ID')}\n*Status:* Menunggu Konfirmasi Kasir`;
+
+                // 2. Kirim Notif Gateway ke Owner jika token diisi
+                if (fonnteToken && fonnteToken !== "") {
+                    fetch('https://api.fonnte.com/send', {
+                        method: 'POST',
+                        headers: { 'Authorization': fonnteToken },
+                        body: new URLSearchParams({ 'target': nomorWaOwner, 'message': pesanWA })
+                    }).catch(err => console.error(err));
+                }
+
+                // 3. Open Direct WA ke Kasir
+                const urlWa = `https://wa.me/${nomorWaKasir}?text=${encodeURIComponent(pesanWA)}`;
+                window.open(urlWa, '_blank');
+
+                // Reset
+                keranjang = {};
+                tutupModalCheckout();
+                renderMenu();
+                alert("Pesanan berhasil dikirim!");
+
+            } catch (error) {
+                console.error("Error: ", error);
+                alert("Gagal memproses pesanan.");
+            }
+        };
+
+        document.getElementById('searchMenu').addEventListener('input', renderMenu);
+    </script>
+</head>
+<body class="bg-gray-50 font-sans pb-28">
+
+    <!-- Header Grab Style -->
+    <header class="grab-green text-white p-4 sticky top-0 z-20 shadow-md rounded-b-2xl">
+        <div class="max-w-md mx-auto space-y-3">
+            <div class="flex justify-between items-center">
+                <div class="flex items-center space-x-2">
+                    <div class="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center">
+                        <i data-lucide="utensils" class="w-5 h-5 text-white"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-base font-extrabold leading-tight">Kedai Food</h1>
+                        <p class="text-[11px] text-green-100 flex items-center gap-1">
+                            <i data-lucide="map-pin" class="w-3 h-3"></i> Pesan Langsung dari Meja
+                        </p>
+                    </div>
+                </div>
+                <span class="bg-white/20 text-[10px] px-2.5 py-1 rounded-full font-bold backdrop-blur-sm">ONLINE MENU</span>
+            </div>
+
+            <!-- Search Bar -->
+            <div class="relative">
+                <i data-lucide="search" class="w-4 h-4 text-gray-400 absolute left-3 top-3"></i>
+                <input type="text" id="searchMenu" placeholder="Cari makanan atau minuman..." 
+                    class="w-full bg-white text-gray-800 text-xs pl-9 pr-4 py-2.5 rounded-xl shadow-inner outline-none placeholder-gray-400">
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-md mx-auto p-4 space-y-4">
+        <!-- Horizontal Category Tabs -->
+        <div class="flex space-x-2 overflow-x-auto no-scrollbar py-1" id="categoryTabs"></div>
+
+        <!-- Banner Promo -->
+        <div class="bg-gradient-to-r from-emerald-500 to-teal-600 rounded-2xl p-3.5 text-white flex justify-between items-center shadow-sm">
+            <div>
+                <p class="text-[10px] font-bold text-emerald-100 uppercase tracking-wider">Promo Hari Ini ⚡</p>
+                <p class="text-xs font-extrabold mt-0.5">Pesan Langsung via WA & Bebas Antre!</p>
+            </div>
+            <i data-lucide="sparkles" class="w-7 h-7 text-yellow-300"></i>
+        </div>
+
+        <!-- Daftar Menu Grid -->
+        <div class="space-y-3" id="menuListContainer">
+            <p class="text-center text-gray-400 text-xs py-10">Memuat menu kedai...</p>
+        </div>
+    </main>
+
+    <!-- Floating Cart Bar -->
+    <div id="floatingCartBar" class="fixed bottom-0 left-0 right-0 p-4 z-30 transition-transform duration-300 transform translate-y-full">
+        <div class="max-w-md mx-auto">
+            <button onclick="bukaModalCheckout()" class="w-full grab-green text-white p-3.5 rounded-2xl shadow-2xl flex justify-between items-center hover:opacity-95 transition">
+                <div class="flex items-center space-x-3">
+                    <div class="relative">
+                        <i data-lucide="shopping-bag" class="w-6 h-6"></i>
+                        <span id="cartBadge" class="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] w-5 h-5 rounded-full flex items-center justify-center font-bold border-2 border-green-600">0</span>
+                    </div>
+                    <div class="text-left">
+                        <p class="text-[10px] text-green-100 font-medium">Keranjang Pesanan</p>
+                        <p class="font-extrabold text-sm" id="cartTotal">Rp 0</p>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-1 font-bold text-xs bg-white/20 px-3 py-1.5 rounded-xl">
+                    <span>Lihat Pesanan</span>
+                    <i data-lucide="chevron-right" class="w-4 h-4"></i>
+                </div>
+            </button>
+        </div>
+    </div>
+
+    <!-- Modal Checkout Bottom Sheet -->
+    <div id="checkoutModal" class="fixed inset-0 bg-black/60 z-40 hidden flex items-end justify-center">
+        <div class="bg-white w-full max-w-md rounded-t-3xl p-5 space-y-4 max-h-[85vh] overflow-y-auto">
+            <div class="flex justify-between items-center border-b pb-3">
+                <h2 class="font-bold text-gray-800 text-sm flex items-center gap-2">
+                    <i data-lucide="receipt" class="w-4 h-4 grab-text-green"></i> Konfirmasi Pesanan
+                </h2>
+                <button onclick="tutupModalCheckout()" class="text-gray-400 hover:text-gray-600 p-1">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <!-- Form Pemesan -->
+            <div class="bg-gray-50 p-3 rounded-2xl space-y-2 border border-gray-100">
+                <p class="text-xs font-bold text-gray-600">Informasi Pemesan</p>
+                <div class="grid grid-cols-2 gap-2">
+                    <input type="text" id="namaPemesan" placeholder="Nama Anda" class="w-full border border-gray-200 p-2 rounded-xl text-xs outline-none focus:ring-1 focus:ring-green-500 bg-white">
+                    <input type="text" id="nomorMeja" placeholder="Nomor Meja / Takeaway" class="w-full border border-gray-200 p-2 rounded-xl text-xs outline-none focus:ring-1 focus:ring-green-500 bg-white">
+                </div>
+            </div>
+
+            <!-- Rincian Pesanan -->
+            <div>
+                <p class="text-xs font-bold text-gray-600 mb-1">Rincian Menu</p>
+                <div id="checkoutItemsList" class="divide-y divide-gray-100"></div>
+            </div>
+
+            <div class="border-t pt-3 space-y-3">
+                <div class="flex justify-between text-sm font-extrabold text-gray-800">
+                    <span>Total Pembayaran</span>
+                    <span id="modalTotalHarga" class="grab-text-green">Rp 0</span>
+                </div>
+                <button onclick="prosesPesanan()" class="w-full grab-green text-white py-3.5 rounded-2xl font-bold text-xs shadow-lg hover:opacity-90 flex justify-center items-center gap-2">
+                    <i data-lucide="send" class="w-4 h-4"></i> Kirim Pesanan via WhatsApp
+                </button>
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>
