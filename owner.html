@@ -3,23 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Superadmin - Kelola Menu, Harga & Integrasi WA</title>
+    <title>Owner Dashboard - Panel Pengelola Kedai</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
+
     <style>
-        @keyframes fadeIn {
-            from { opacity: 0; transform: scale(0.95); }
-            to { opacity: 1; transform: scale(1); }
+        @media print {
+            body * { visibility: hidden; }
+            #printableReceipt, #printableReceipt * { visibility: visible; }
+            #printableReceipt { position: absolute; left: 0; top: 0; width: 100%; }
         }
-        .animate-fade-in { animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
     </style>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { 
-            getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc, updateDoc, setDoc, getDoc 
+            getFirestore, collection, onSnapshot, doc, setDoc, addDoc, updateDoc, deleteDoc, query, orderBy, getDoc 
         } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
         // FIREBASE CONFIG MILIK ANDA
@@ -36,505 +37,532 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
-        // KONEKSI CLOUDINARY UNTUK UPLOAD FOTO GALERI
-        const CLOUDINARY_CLOUD_NAME = "demo"; 
-        const CLOUDINARY_UPLOAD_PRESET = "unsigned_preset"; 
+        // State Global
+        let allOrders = [];
+        let allMenus = [];
+        let allCategories = [];
+        let selectedOrderForPrint = null;
 
-        const settingsDocRef = doc(db, "settings", "config");
-        let activeEditMenuId = null;
-
-        // Custom Toast Pop-up Elegan (Pengganti Alert)
-        window.showNotice = function(pesan, tipe = 'success', judul = 'Informasi') {
-            const modal = document.getElementById('noticeModal');
-            const iconContainer = document.getElementById('noticeIcon');
-            document.getElementById('noticeTitle').innerText = judul;
-            document.getElementById('noticeMessage').innerText = pesan;
-
-            if (tipe === 'success') {
-                iconContainer.className = "w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-3";
-                iconContainer.innerHTML = `<i data-lucide="check-circle-2" class="w-7 h-7"></i>`;
-            } else {
-                iconContainer.className = "w-12 h-12 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center mx-auto mb-3";
-                iconContainer.innerHTML = `<i data-lucide="info" class="w-7 h-7"></i>`;
-            }
-
-            modal.classList.remove('hidden');
-            lucide.createIcons();
+        // Toast Helper
+        window.showNotice = function(pesan, tipe = 'success') {
+            const el = document.getElementById('toastNotice');
+            el.innerText = pesan;
+            el.className = `fixed bottom-5 right-5 px-4 py-3 rounded-xl text-white font-bold text-xs shadow-xl transition-all z-50 ${tipe === 'success' ? 'bg-emerald-600' : 'bg-red-600'}`;
+            el.classList.remove('hidden');
+            setTimeout(() => el.classList.add('hidden'), 3000);
         };
 
-        window.closeNotice = function() {
-            document.getElementById('noticeModal').classList.add('hidden');
-        };
+        // 1. REALTIME LISTENER PESANAN & LAPORAN RINGKAS
+        const qOrders = query(collection(db, "orders"), orderBy("createdAt", "desc"));
+        onSnapshot(qOrders, (snapshot) => {
+            allOrders = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
+            renderReportSummary();
+            renderTransactionHistory();
+        });
 
-        // 1. LOAD PENGATURAN SYSTEM
-        async function loadSettings() {
-            try {
-                const docSnap = await getDoc(settingsDocRef);
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
-                    document.getElementById('settingWaKasir').value = data.nomorWaKasir || '';
-                    document.getElementById('settingWaOwner').value = data.nomorWaOwner || '';
-                    document.getElementById('settingFonnteToken').value = data.fonnteToken || '';
-                    document.getElementById('settingNamaKedai').value = data.namaKedai || '';
+        function renderReportSummary() {
+            let totalOmset = 0;
+            let totalTransaksi = 0;
+            let totalBatal = 0;
+
+            allOrders.forEach(ord => {
+                if (ord.status === "Selesai") {
+                    totalOmset += Number(ord.total_harga || 0);
+                    totalTransaksi++;
+                } else if (ord.status === "Dibatalkan") {
+                    totalBatal++;
                 }
-            } catch (err) {
-                console.error("Gagal memuat pengaturan:", err);
-            }
+            });
+
+            document.getElementById('statOmset').innerText = 'Rp ' + totalOmset.toLocaleString('id-ID');
+            document.getElementById('statTransaksi').innerText = totalTransaksi + ' Pesanan';
+            document.getElementById('statBatal').innerText = totalBatal + ' Dibatalkan';
         }
 
-        window.simpanPengaturan = async function() {
-            const waKasir = document.getElementById('settingWaKasir').value.trim();
-            const waOwner = document.getElementById('settingWaOwner').value.trim();
-            const fonnteToken = document.getElementById('settingFonnteToken').value.trim();
-            const namaKedai = document.getElementById('settingNamaKedai').value.trim();
-
-            if (!waKasir) return showNotice("Nomor WA Kasir tidak boleh kosong!", "warning", "Gagal Simpan");
-
-            try {
-                await setDoc(settingsDocRef, {
-                    nomorWaKasir: waKasir,
-                    nomorWaOwner: waOwner,
-                    fonnteToken: fonnteToken,
-                    namaKedai: namaKedai || "Kedai Food",
-                    updatedAt: new Date()
-                }, { merge: true });
-
-                showNotice("Pengaturan WhatsApp berhasil disimpan!", "success", "Berhasil");
-            } catch (err) {
-                console.error(err);
-                showNotice("Gagal menyimpan pengaturan.", "warning", "Error");
-            }
-        };
-
-        // 2. KELOLA KATEGORI REALTIME
-        onSnapshot(collection(db, "categories"), (snapshot) => {
-            const katSelect = document.getElementById('katMenu');
-            const listKatContainer = document.getElementById('categoryManageList');
-            
-            if(!katSelect || !listKatContainer) return;
-
-            katSelect.innerHTML = '';
-            listKatContainer.innerHTML = '';
-
-            if(snapshot.empty) {
-                const defaultKategori = ["Makanan", "Minuman", "Cemilan"];
-                defaultKategori.forEach(k => addDoc(collection(db, "categories"), { nama: k }));
+        // Ekspor Laporan Ke CSV
+        window.exportToCSV = function() {
+            if (allOrders.length === 0) {
+                showNotice("Tidak ada data pesanan untuk diekspor!", "error");
                 return;
             }
 
-            snapshot.forEach((docSnap) => {
-                const data = docSnap.data();
-                const id = docSnap.id;
+            let csvContent = "data:text/csv;charset=utf-8,";
+            csvContent += "No Invoice,Nama Pemesan,Meja,Status,Total Harga,Metode Pembayaran,Tanggal\n";
 
-                katSelect.innerHTML += `<option value="${data.nama}">${data.nama}</option>`;
+            allOrders.forEach(ord => {
+                const tgl = ord.createdAt ? (ord.createdAt.toDate ? ord.createdAt.toDate().toLocaleString('id-ID') : new Date(ord.createdAt).toLocaleString('id-ID')) : '-';
+                csvContent += `"${ord.no_invoice || ord.id}","${ord.nama_pemesan || '-'}","${ord.meja || '-'}","${ord.status}","${ord.total_harga || 0}","${ord.metode_pembayaran || 'Tunai'}","${tgl}"\n`;
+            });
 
-                listKatContainer.innerHTML += `
-                    <div class="flex justify-between items-center p-2 bg-gray-50 border rounded-xl">
-                        <span class="text-xs font-bold text-gray-700">${data.nama}</span>
-                        <div class="space-x-1">
-                            <button onclick="editKategori('${id}', '${data.nama}')" class="text-blue-600 p-1 text-xs font-bold">Edit</button>
-                            <button onclick="hapusKategori('${id}')" class="text-red-500 p-1 text-xs font-bold">Hapus</button>
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", `Laporan_Penjualan_${new Date().toISOString().slice(0,10)}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            showNotice("Laporan CSV berhasil diunduh!");
+        };
+
+        function renderTransactionHistory() {
+            const tableBody = document.getElementById('historyTableBody');
+            tableBody.innerHTML = '';
+
+            if (allOrders.length === 0) {
+                tableBody.innerHTML = `<tr><td colspan="6" class="text-center py-6 text-gray-400 text-xs">Belum ada riwayat transaksi.</td></tr>`;
+                return;
+            }
+
+            allOrders.forEach(ord => {
+                let badgeColor = "bg-yellow-100 text-yellow-800";
+                if(ord.status === "Diproses") badgeColor = "bg-blue-100 text-blue-800";
+                if(ord.status === "Selesai") badgeColor = "bg-green-100 text-green-800";
+                if(ord.status === "Dibatalkan") badgeColor = "bg-red-100 text-red-800";
+
+                const tgl = ord.createdAt ? (ord.createdAt.toDate ? ord.createdAt.toDate().toLocaleDateString('id-ID') : new Date(ord.createdAt).toLocaleDateString('id-ID')) : '-';
+
+                tableBody.innerHTML += `
+                    <tr class="border-b border-gray-100 hover:bg-gray-50 text-xs">
+                        <td class="p-3 font-bold text-gray-800">#${ord.no_invoice || ord.id}</td>
+                        <td class="p-3">${ord.nama_pemesan || '-'} (${ord.meja || '-'})</td>
+                        <td class="p-3">${tgl}</td>
+                        <td class="p-3 font-bold text-emerald-600">Rp ${Number(ord.total_harga || 0).toLocaleString('id-ID')}</td>
+                        <td class="p-3"><span class="px-2 py-0.5 rounded-full font-bold text-[10px] ${badgeColor}">${ord.status}</span></td>
+                        <td class="p-3 text-right space-x-1">
+                            <button onclick="bukaCetakStruk('${ord.id}')" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-2.5 py-1 rounded-lg font-bold text-[11px] transition">
+                                <i data-lucide="printer" class="w-3.5 h-3.5 inline"></i> Struk
+                            </button>
+                            ${ord.status !== 'Selesai' ? `
+                                <button onclick="selesaikanDanPotongStok('${ord.id}')" class="bg-emerald-600 hover:bg-emerald-700 text-white px-2 py-1 rounded-lg font-bold text-[11px] transition">
+                                    Selesai & Potong Stok
+                                </button>
+                            ` : ''}
+                        </td>
+                    </tr>
+                `;
+            });
+            lucide.createIcons();
+        }
+
+        // 2. MANAJEMEN STOK & INVENTORY TRACKER
+        window.selesaikanDanPotongStok = async function(orderId) {
+            const ord = allOrders.find(o => o.id === orderId);
+            if (!ord) return;
+
+            // Potong stok per item jika ada
+            if (ord.items) {
+                for (let item of ord.items) {
+                    if (item.menu_id) {
+                        const menuDoc = await getDoc(doc(db, "menus", item.menu_id));
+                        if (menuDoc.exists()) {
+                            const currentStok = Number(menuDoc.data().stok || 0);
+                            const newStok = Math.max(0, currentStok - Number(item.jumlah || 1));
+                            await updateDoc(doc(db, "menus", item.menu_id), { 
+                                stok: newStok,
+                                tersedia: newStok > 0 
+                            });
+                        }
+                    }
+                }
+            }
+
+            await updateDoc(doc(db, "orders", orderId), { status: "Selesai" });
+            showNotice("Status diperbarui & stok otomatis terpotong!");
+        };
+
+        // 3. REALTIME LISTENER MENU & KATEGORI
+        onSnapshot(collection(db, "menus"), (snapshot) => {
+            allMenus = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
+            renderMenuList();
+        });
+
+        onSnapshot(collection(db, "categories"), (snapshot) => {
+            allCategories = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
+            renderCategorySelect();
+            renderCategoryList();
+        });
+
+        function renderCategorySelect() {
+            const select = document.getElementById('menuKategoriSelect');
+            select.innerHTML = '<option value="">Pilih Kategori</option>';
+            allCategories.forEach(cat => {
+                select.innerHTML += `<option value="${cat.nama}">${cat.nama}</option>`;
+            });
+        }
+
+        function renderCategoryList() {
+            const container = document.getElementById('categoryList');
+            container.innerHTML = '';
+            allCategories.forEach(cat => {
+                container.innerHTML += `
+                    <div class="flex justify-between items-center bg-gray-50 p-2 rounded-xl border border-gray-200 text-xs">
+                        <span class="font-bold text-gray-700">${cat.nama}</span>
+                        <button onclick="hapusKategori('${cat.id}')" class="text-red-500 hover:text-red-700 font-bold p-1">
+                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                `;
+            });
+            lucide.createIcons();
+        }
+
+        function renderMenuList() {
+            const container = document.getElementById('menuListOwner');
+            container.innerHTML = '';
+
+            if (allMenus.length === 0) {
+                container.innerHTML = `<p class="col-span-full text-center text-gray-400 text-xs py-8">Belum ada menu tersimpan.</p>`;
+                return;
+            }
+
+            allMenus.forEach(item => {
+                const stok = Number(item.stok || 0);
+                const isLowStock = stok <= 5;
+
+                container.innerHTML += `
+                    <div class="bg-white border border-gray-200 rounded-2xl p-3 shadow-sm flex items-center justify-between space-x-3">
+                        <img src="${item.fotoUrl || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=150'}" class="w-14 h-14 rounded-xl object-cover border bg-gray-50">
+                        <div class="flex-1 min-w-0">
+                            <h4 class="font-bold text-gray-800 text-xs truncate">${item.nama}</h4>
+                            <p class="text-[10px] text-gray-400">${item.kategori || 'Umum'} • Rp ${Number(item.harga).toLocaleString('id-ID')}</p>
+                            
+                            <!-- Tracking Stok -->
+                            <div class="flex items-center space-x-1.5 mt-1">
+                                <span class="text-[10px] font-bold ${isLowStock ? 'text-red-600 bg-red-50 px-1.5 py-0.5 rounded border border-red-200' : 'text-emerald-600'}">
+                                    Stok: ${stok} ${isLowStock ? '(Hampir Habis!)' : ''}
+                                </span>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col items-end space-y-1">
+                            <button onclick="toggleTersedia('${item.id}', ${item.tersedia !== false})" class="px-2 py-1 rounded-lg text-[10px] font-bold ${item.tersedia !== false ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">
+                                ${item.tersedia !== false ? 'Aktif' : 'Nonaktif'}
+                            </button>
+                            <div class="flex space-x-1">
+                                <button onclick="editStokModal('${item.id}', ${stok})" class="p-1 bg-gray-100 hover:bg-gray-200 rounded-lg text-gray-600"><i data-lucide="boxes" class="w-3.5 h-3.5"></i></button>
+                                <button onclick="hapusMenu('${item.id}')" class="p-1 bg-red-50 hover:bg-red-100 rounded-lg text-red-600"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+                            </div>
                         </div>
                     </div>
                 `;
             });
-        });
+            lucide.createIcons();
+        }
 
-        window.tambahKategori = async function() {
-            const namaKat = prompt("Masukkan Nama Kategori Baru:");
-            if(namaKat && namaKat.trim() !== "") {
-                await addDoc(collection(db, "categories"), { nama: namaKat.trim() });
-                showNotice("Kategori baru berhasil ditambahkan!", "success", "Kategori Ditambah");
+        // CRUD Actions Menu & Kategori
+        window.simpanMenu = async function() {
+            const nama = document.getElementById('menuNama').value.trim();
+            const harga = Number(document.getElementById('menuHarga').value);
+            const kategori = document.getElementById('menuKategoriSelect').value;
+            const stok = Number(document.getElementById('menuStok').value || 0);
+            const fotoUrl = document.getElementById('menuFotoUrl').value.trim();
+
+            if (!nama || !harga) {
+                showNotice("Nama dan Harga wajib diisi!", "error");
+                return;
+            }
+
+            await addDoc(collection(db, "menus"), {
+                nama, harga, kategori, stok, fotoUrl, tersedia: true, createdAt: serverTimestamp()
+            });
+
+            document.getElementById('menuNama').value = '';
+            document.getElementById('menuHarga').value = '';
+            document.getElementById('menuStok').value = '10';
+            document.getElementById('menuFotoUrl').value = '';
+            showNotice("Menu baru berhasil ditambahkan!");
+        };
+
+        window.toggleTersedia = async function(id, statusSaatIni) {
+            await updateDoc(doc(db, "menus", id), { tersedia: !statusSaatIni });
+        };
+
+        window.editStokModal = async function(id, stokLama) {
+            const stokBaru = prompt("Masukkan jumlah stok baru:", stokLama);
+            if (stokBaru !== null && !isNaN(stokBaru)) {
+                await updateDoc(doc(db, "menus", id), { 
+                    stok: Number(stokBaru),
+                    tersedia: Number(stokBaru) > 0 
+                });
+                showNotice("Stok menu diperbarui!");
             }
         };
 
-        window.editKategori = async function(id, namaLama) {
-            const namaBaru = prompt("Ubah Nama Kategori:", namaLama);
-            if(namaBaru && namaBaru.trim() !== "" && namaBaru !== namaLama) {
-                await updateDoc(doc(db, "categories", id), { nama: namaBaru.trim() });
-                showNotice("Nama kategori telah diperbarui!", "success", "Kategori Diubah");
+        window.hapusMenu = async function(id) {
+            if (confirm("Yakin ingin menghapus menu ini?")) {
+                await deleteDoc(doc(db, "menus", id));
+                showNotice("Menu dihapus.");
+            }
+        };
+
+        window.tambahKategori = async function() {
+            const input = document.getElementById('inputKategoriBaru');
+            const nama = input.value.trim();
+            if (nama) {
+                await addDoc(collection(db, "categories"), { nama });
+                input.value = '';
+                showNotice("Kategori ditambahkan!");
             }
         };
 
         window.hapusKategori = async function(id) {
-            if(confirm("Yakin ingin menghapus kategori ini?")) {
+            if (confirm("Hapus kategori ini?")) {
                 await deleteDoc(doc(db, "categories", id));
+                showNotice("Kategori dihapus.");
             }
         };
 
-        // 3. UPLOAD FOTO GALERI
-        window.uploadFotoGaleri = async function(fileInput) {
-            const file = fileInput.files[0];
-            if (!file) return null;
+        // 4. CETAK STRUK TRANSAKSI
+        window.bukaCetakStruk = function(orderId) {
+            const ord = allOrders.find(o => o.id === orderId);
+            if (!ord) return;
+            selectedOrderForPrint = ord;
 
-            const formData = new FormData();
-            formData.append('file', file);
-            formData.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
-
-            document.getElementById('uploadProgress').classList.remove('hidden');
-
-            try {
-                const response = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`, {
-                    method: 'POST',
-                    body: formData
-                });
-                const data = await response.json();
-                document.getElementById('uploadProgress').classList.add('hidden');
-                return data.secure_url || null;
-            } catch (err) {
-                document.getElementById('uploadProgress').classList.add('hidden');
-                return null;
-            }
-        };
-
-        // 4. TAMBAH MENU BARU
-        window.tambahMenu = async function() {
-            const nama = document.getElementById('namaMenu').value.trim();
-            const harga = Number(document.getElementById('hargaMenu').value);
-            const kategori = document.getElementById('katMenu').value;
-            const urlManual = document.getElementById('fotoUrlManual').value.trim();
-            const fileInput = document.getElementById('fotoGaleriInput');
-
-            if(!nama || !harga) return showNotice("Isi Nama & Harga Menu terlebih dahulu!", "warning", "Data Belum Lengkap");
-
-            let fotoUrl = urlManual || "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=300";
-
-            if(fileInput.files.length > 0) {
-                const urlUploaded = await uploadFotoGaleri(fileInput);
-                if(urlUploaded) fotoUrl = urlUploaded;
-            }
-
-            await addDoc(collection(db, "menus"), {
-                nama: nama,
-                harga: harga,
-                kategori: kategori,
-                fotoUrl: fotoUrl,
-                tersedia: true
-            });
-
-            document.getElementById('namaMenu').value = '';
-            document.getElementById('hargaMenu').value = '';
-            document.getElementById('fotoUrlManual').value = '';
-            document.getElementById('fotoGaleriInput').value = '';
-            document.getElementById('previewFoto').classList.add('hidden');
-            showNotice("Menu makanan berhasil ditambahkan!", "success", "Menu Ditambah");
-        };
-
-        window.previewImage = function(input) {
-            const preview = document.getElementById('previewFoto');
-            if (input.files && input.files[0]) {
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    preview.src = e.target.result;
-                    preview.classList.remove('hidden');
-                }
-                reader.readAsDataURL(input.files[0]);
-            }
-        };
-
-        // 5. FITUR EDIT HARGA & NAMA PRODUK
-        window.bukaModalEditMenu = function(id, namaLama, hargaLama) {
-            activeEditMenuId = id;
-            document.getElementById('editNamaMenuInput').value = namaLama;
-            document.getElementById('editHargaMenuInput').value = hargaLama;
-            document.getElementById('editMenuModal').classList.remove('hidden');
-        };
-
-        window.tutupModalEditMenu = function() {
-            activeEditMenuId = null;
-            document.getElementById('editMenuModal').classList.add('hidden');
-        };
-
-        window.simpanPerubahanMenu = async function() {
-            if(!activeEditMenuId) return;
-
-            const namaBaru = document.getElementById('editNamaMenuInput').value.trim();
-            const hargaBaru = Number(document.getElementById('editHargaMenuInput').value);
-
-            if(!namaBaru || !hargaBaru) {
-                return showNotice("Nama dan Harga tidak boleh kosong!", "warning", "Data Salah");
-            }
-
-            try {
-                await updateDoc(doc(db, "menus", activeEditMenuId), {
-                    nama: namaBaru,
-                    harga: hargaBaru
-                });
-
-                tutupModalEditMenu();
-                showNotice("Harga dan Nama produk berhasil diperbarui!", "success", "Update Berhasil");
-            } catch(e) {
-                console.error(e);
-                showNotice("Gagal memperbarui produk.", "warning", "Error");
-            }
-        };
-
-        // 6. LOAD REKAP OMSET REALTIME
-        onSnapshot(collection(db, "orders"), (snapshot) => {
-            let totalOmset = 0;
-            let totalSelesai = 0;
-            let totalPending = 0;
-
-            snapshot.forEach(docSnap => {
-                const d = docSnap.data();
-                if(d.status === "Selesai") {
-                    totalOmset += Number(d.total_harga || 0);
-                    totalSelesai++;
-                } else if(d.status === "Pending") {
-                    totalPending++;
-                }
-            });
-
-            document.getElementById('totalOmset').innerText = "Rp " + totalOmset.toLocaleString('id-ID');
-            document.getElementById('totalSelesai').innerText = totalSelesai + " Pesanan";
-            document.getElementById('totalPending').innerText = totalPending + " Menunggu";
-        });
-
-        // 7. LOAD & MANAGE MENU (DENGAN TOMBOL EDIT HARGA)
-        onSnapshot(collection(db, "menus"), (snapshot) => {
-            const list = document.getElementById('menuListOwner');
-            list.innerHTML = '';
-
-            snapshot.forEach(docSnap => {
-                const m = docSnap.data();
-                const id = docSnap.id;
-                list.innerHTML += `
-                    <div class="flex justify-between items-center p-3 bg-white border border-gray-200 rounded-2xl shadow-sm">
-                        <div class="flex items-center space-x-3">
-                            <img src="${m.fotoUrl}" class="w-12 h-12 rounded-xl object-cover bg-gray-100 border">
+            const printContainer = document.getElementById('printableReceipt');
+            let itemsHtml = '';
+            
+            if (ord.items) {
+                ord.items.forEach(it => {
+                    itemsHtml += `
+                        <div class="flex justify-between text-xs my-1">
                             <div>
-                                <p class="font-bold text-xs text-gray-800">${m.nama}</p>
-                                <p class="text-[10px] text-gray-400">${m.kategori} • <span class="font-bold text-emerald-600">Rp ${Number(m.harga).toLocaleString('id-ID')}</span></p>
+                                <p class="font-bold">${it.nama} x${it.jumlah}</p>
+                                ${it.catatan ? `<p class="text-[10px] text-gray-500">${it.catatan}</p>` : ''}
                             </div>
+                            <p class="font-bold">Rp ${Number(it.subtotal || (it.harga * it.jumlah)).toLocaleString('id-ID')}</p>
                         </div>
-                        <div class="flex items-center space-x-1.5">
-                            <!-- Tombol Edit Harga & Nama -->
-                            <button onclick="bukaModalEditMenu('${id}', '${m.nama.replace(/'/g, "\\'")}', ${m.harga})" class="bg-blue-50 text-blue-600 border border-blue-200 px-2.5 py-1 text-[10px] rounded-lg font-bold flex items-center gap-0.5 hover:bg-blue-100 transition">
-                                <i data-lucide="pencil" class="w-3 h-3"></i> Edit
-                            </button>
-
-                            <!-- Tombol Status Ready/Habis -->
-                            <button onclick="toggleReady('${id}', ${!m.tersedia})" class="${m.tersedia !== false ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'} px-2.5 py-1 text-[10px] rounded-lg font-bold">
-                                ${m.tersedia !== false ? 'Ready' : 'Habis'}
-                            </button>
-
-                            <!-- Tombol Hapus -->
-                            <button onclick="hapusMenu('${id}')" class="text-red-500 hover:text-red-700 p-1">
-                                <i data-lucide="trash-2" class="w-4 h-4"></i>
-                            </button>
-                        </div>
-                    </div>
-                `;
-            });
-            lucide.createIcons();
-        });
-
-        window.toggleReady = async function(id, status) {
-            await updateDoc(doc(db, "menus", id), { tersedia: status });
-        };
-
-        window.hapusMenu = async function(id) {
-            if(confirm("Hapus menu ini?")) await deleteDoc(doc(db, "menus", id));
-        };
-
-        window.switchTab = function(tabName) {
-            const tabMenu = document.getElementById('tabContentMenu');
-            const tabSettings = document.getElementById('tabContentSettings');
-            const btnTabMenu = document.getElementById('btnTabMenu');
-            const btnTabSettings = document.getElementById('btnTabSettings');
-
-            if(tabName === 'menu') {
-                tabMenu.classList.remove('hidden');
-                tabSettings.classList.add('hidden');
-                btnTabMenu.className = "px-4 py-2 text-xs font-bold rounded-xl bg-emerald-600 text-white shadow-sm";
-                btnTabSettings.className = "px-4 py-2 text-xs font-bold rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200";
-            } else {
-                tabMenu.classList.add('hidden');
-                tabSettings.classList.remove('hidden');
-                btnTabSettings.className = "px-4 py-2 text-xs font-bold rounded-xl bg-emerald-600 text-white shadow-sm";
-                btnTabMenu.className = "px-4 py-2 text-xs font-bold rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200";
+                    `;
+                });
             }
+
+            const tgl = ord.createdAt ? (ord.createdAt.toDate ? ord.createdAt.toDate().toLocaleString('id-ID') : new Date(ord.createdAt).toLocaleString('id-ID')) : '-';
+
+            printContainer.innerHTML = `
+                <div class="p-4 max-w-xs mx-auto border border-gray-300 font-mono text-gray-900 bg-white rounded-xl">
+                    <div class="text-center border-b pb-2 mb-2">
+                        <h2 class="font-extrabold text-base uppercase">KEDAI FOOD</h2>
+                        <p class="text-[10px]">Struk Pembayaran Resmi</p>
+                        <p class="text-[10px] text-gray-500">${tgl}</p>
+                    </div>
+
+                    <div class="text-xs mb-2 border-b pb-2 space-y-0.5">
+                        <p>No: <span class="font-bold">#${ord.no_invoice || ord.id}</span></p>
+                        <p>Pelanggan: <span class="font-bold">${ord.nama_pemesan || '-'}</span></p>
+                        <p>Meja/Tipe: <span class="font-bold">${ord.meja || '-'}</span></p>
+                        <p>Metode: <span class="font-bold">${ord.metode_pembayaran || 'Tunai'}</span></p>
+                    </div>
+
+                    <div class="border-b pb-2 mb-2">
+                        ${itemsHtml}
+                    </div>
+
+                    <div class="flex justify-between font-extrabold text-sm pt-1">
+                        <span>TOTAL</span>
+                        <span>Rp ${Number(ord.total_harga || 0).toLocaleString('id-ID')}</span>
+                    </div>
+
+                    <div class="text-center mt-4 pt-2 border-t text-[10px] text-gray-500">
+                        <p>Terima Kasih Atas Kunjungan Anda!</p>
+                        <p>Simpan Struk Ini Sebagai Bukti Pembayaran</p>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('receiptModal').classList.remove('hidden');
         };
 
+        window.tutupModalStruk = function() {
+            document.getElementById('receiptModal').classList.add('hidden');
+        };
+
+        window.eksekusiCetak = function() {
+            window.print();
+        };
+
+        // 5. PENGATURAN WA & FONNTE
+        window.loadSettings = async function() {
+            try {
+                const docSnap = await getDoc(doc(db, "settings", "config"));
+                if (docSnap.exists()) {
+                    const cfg = docSnap.data();
+                    if(cfg.nomorWaKasir) document.getElementById('cfgWaKasir').value = cfg.nomorWaKasir;
+                    if(cfg.nomorWaOwner) document.getElementById('cfgWaOwner').value = cfg.nomorWaOwner;
+                    if(cfg.fonnteToken) document.getElementById('cfgFonnteToken').value = cfg.fonnteToken;
+                }
+            } catch(e) { console.error(e); }
+        };
+
+        window.simpanSettings = async function() {
+            const nomorWaKasir = document.getElementById('cfgWaKasir').value.trim();
+            const nomorWaOwner = document.getElementById('cfgWaOwner').value.trim();
+            const fonnteToken = document.getElementById('cfgFonnteToken').value.trim();
+
+            await setDoc(doc(db, "settings", "config"), {
+                nomorWaKasir, nomorWaOwner, fonnteToken
+            }, { merge: true });
+
+            showNotice("Pengaturan WhatsApp & API disimpan!");
+        };
+
+        // Inisialisasi
         loadSettings();
     </script>
 </head>
 <body class="bg-gray-100 p-4 font-sans min-h-screen">
-    <div class="max-w-3xl mx-auto space-y-5">
+
+    <div id="toastNotice" class="hidden"></div>
+
+    <div class="max-w-5xl mx-auto space-y-5">
         
-        <!-- Header Dashboard -->
-        <header class="flex justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-200">
+        <!-- Header Owner -->
+        <header class="bg-white p-4 rounded-2xl shadow-sm border border-gray-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
             <div class="flex items-center space-x-3">
-                <div class="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
+                <div class="w-10 h-10 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center font-bold">
                     <i data-lucide="shield-check" class="w-5 h-5"></i>
                 </div>
                 <div>
-                    <h1 class="text-base font-extrabold text-gray-800">Superadmin Panel</h1>
-                    <p class="text-xs text-gray-400">Pusat Kelola Menu, Harga & Integrasi WA</p>
+                    <h1 class="text-base font-extrabold text-gray-800">Owner Dashboard & Inventory</h1>
+                    <p class="text-xs text-gray-400">Pusat Manajemen Kelola Kedai</p>
                 </div>
             </div>
+
+            <button onclick="exportToCSV()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-sm">
+                <i data-lucide="download" class="w-4 h-4"></i> Ekspor Laporan CSV
+            </button>
         </header>
 
-        <!-- Stats Omset -->
-        <div class="grid grid-cols-3 gap-3">
-            <div class="bg-white p-3.5 rounded-2xl border shadow-sm">
-                <p class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Total Omset</p>
-                <p class="text-base font-extrabold text-emerald-600 mt-1" id="totalOmset">Rp 0</p>
+        <!-- Stat Ringkasan Laporan -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div class="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-bold text-gray-400">Total Omset Selesai</p>
+                    <h3 id="statOmset" class="text-lg font-extrabold text-emerald-600 mt-0.5">Rp 0</h3>
+                </div>
+                <div class="p-3 bg-emerald-50 text-emerald-600 rounded-xl"><i data-lucide="wallet" class="w-6 h-6"></i></div>
             </div>
-            <div class="bg-white p-3.5 rounded-2xl border shadow-sm">
-                <p class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Selesai</p>
-                <p class="text-base font-extrabold text-blue-600 mt-1" id="totalSelesai">0 Pesanan</p>
+            <div class="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-bold text-gray-400">Pesanan Selesai</p>
+                    <h3 id="statTransaksi" class="text-lg font-extrabold text-gray-800 mt-0.5">0 Pesanan</h3>
+                </div>
+                <div class="p-3 bg-blue-50 text-blue-600 rounded-xl"><i data-lucide="shopping-cart" class="w-6 h-6"></i></div>
             </div>
-            <div class="bg-white p-3.5 rounded-2xl border shadow-sm">
-                <p class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Antrean</p>
-                <p class="text-base font-extrabold text-amber-500 mt-1" id="totalPending">0 Menunggu</p>
+            <div class="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-bold text-gray-400">Pesanan Dibatalkan</p>
+                    <h3 id="statBatal" class="text-lg font-extrabold text-red-500 mt-0.5">0 Dibatalkan</h3>
+                </div>
+                <div class="p-3 bg-red-50 text-red-600 rounded-xl"><i data-lucide="x-circle" class="w-6 h-6"></i></div>
             </div>
         </div>
 
-        <!-- Navigation Tabs -->
-        <div class="flex space-x-2 border-b pb-2">
-            <button id="btnTabMenu" onclick="switchTab('menu')" class="px-4 py-2 text-xs font-bold rounded-xl bg-emerald-600 text-white shadow-sm">
-                <i data-lucide="utensils" class="w-3.5 h-3.5 inline mr-1"></i> Kelola Menu & Kategori
-            </button>
-            <button id="btnTabSettings" onclick="switchTab('settings')" class="px-4 py-2 text-xs font-bold rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200">
-                <i data-lucide="settings" class="w-3.5 h-3.5 inline mr-1"></i> Pengaturan WA & Fonte
-            </button>
-        </div>
-
-        <!-- TAB 1: KELOLA MENU & KATEGORI -->
-        <div id="tabContentMenu" class="space-y-4">
+        <!-- Layout 2 Kolom: Tambah Menu & Kategori -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
             
-            <!-- Kategori Management -->
-            <div class="bg-white p-4 rounded-2xl border shadow-sm space-y-3">
-                <div class="flex justify-between items-center">
-                    <h2 class="font-bold text-xs text-gray-700">Daftar Kategori Menu</h2>
-                    <button onclick="tambahKategori()" class="bg-emerald-600 text-white px-3 py-1 rounded-xl text-xs font-bold">+ Kategori Baru</button>
-                </div>
-                <div id="categoryManageList" class="grid grid-cols-2 md:grid-cols-3 gap-2"></div>
-            </div>
-
-            <!-- Tambah Menu -->
-            <div class="bg-white p-4 rounded-2xl border shadow-sm space-y-3">
-                <h2 class="font-bold text-xs text-gray-700 flex items-center gap-1">
-                    <i data-lucide="plus-circle" class="w-4 h-4 text-emerald-600"></i> Tambah Menu Baru
-                </h2>
-                <div class="space-y-2">
-                    <input type="text" id="namaMenu" placeholder="Nama Menu Makanan" class="w-full border p-2.5 text-xs rounded-xl outline-none">
-                    
-                    <div class="grid grid-cols-2 gap-2">
-                        <input type="number" id="hargaMenu" placeholder="Harga (Rp)" class="border p-2.5 text-xs rounded-xl outline-none">
-                        <select id="katMenu" class="border p-2.5 text-xs rounded-xl outline-none bg-white"></select>
-                    </div>
-
-                    <input type="text" id="fotoUrlManual" placeholder="URL Foto Web (Opsional)" class="w-full border p-2.5 text-xs rounded-xl outline-none">
-
-                    <!-- Upload Foto Galeri -->
-                    <div class="border-2 border-dashed border-gray-200 p-3 rounded-2xl text-center space-y-2 bg-gray-50">
-                        <p class="text-xs font-bold text-gray-600">Pilih Foto dari Galeri HP/PC</p>
-                        <input type="file" id="fotoGaleriInput" accept="image/*" onchange="previewImage(this)" class="text-xs text-gray-500 w-full">
-                        <img id="previewFoto" class="w-20 h-20 object-cover rounded-xl mx-auto border hidden">
-                        <p id="uploadProgress" class="text-xs text-emerald-600 font-bold hidden animate-pulse">Mengunggah foto...</p>
-                    </div>
-
-                    <button onclick="tambahMenu()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl text-xs transition shadow">
-                        Simpan Menu
-                    </button>
-                </div>
-            </div>
-
-            <!-- List Menu -->
-            <div class="space-y-2">
-                <h2 class="font-bold text-xs text-gray-700">Daftar Menu Aktif</h2>
-                <div id="menuListOwner" class="space-y-2"></div>
-            </div>
-        </div>
-
-        <!-- TAB 2: PENGATURAN INTEGRASI WA -->
-        <div id="tabContentSettings" class="space-y-4 hidden">
-            <div class="bg-white p-5 rounded-2xl border shadow-sm space-y-4">
-                <div>
-                    <h2 class="font-bold text-sm text-gray-800 flex items-center gap-2">
-                        <i data-lucide="message-square" class="w-4 h-4 text-emerald-600"></i> Pengaturan Integrasi WhatsApp
-                    </h2>
-                    <p class="text-xs text-gray-400 mt-1">Ubah nomor penerima pesanan dan token API Fonte tanpa perlu mengubah kode file.</p>
-                </div>
-
-                <div class="space-y-3 pt-2">
-                    <div>
-                        <label class="block text-xs font-bold text-gray-700 mb-1">Nama Kedai / Usaha</label>
-                        <input type="text" id="settingNamaKedai" placeholder="Contoh: Kedai Makanan Lezat" class="w-full border border-gray-200 p-2.5 text-xs rounded-xl outline-none focus:ring-1 focus:ring-emerald-500">
-                    </div>
-
-                    <div>
-                        <label class="block text-xs font-bold text-gray-700 mb-1">Nomor WhatsApp Kasir / Meja Pemesanan (Format 62)</label>
-                        <input type="text" id="settingWaKasir" placeholder="Contoh: 6281234567890" class="w-full border border-gray-200 p-2.5 text-xs rounded-xl outline-none focus:ring-1 focus:ring-emerald-500">
-                        <p class="text-[10px] text-gray-400 mt-0.5">Tujuan pesan wa.me saat pembeli menekan tombol checkout.</p>
-                    </div>
-
-                    <div>
-                        <label class="block text-xs font-bold text-gray-700 mb-1">Nomor WhatsApp Owner / Notifikasi Dapur (Format 62)</label>
-                        <input type="text" id="settingWaOwner" placeholder="Contoh: 6289876543210" class="w-full border border-gray-200 p-2.5 text-xs rounded-xl outline-none focus:ring-1 focus:ring-emerald-500">
-                        <p class="text-[10px] text-gray-400 mt-0.5">Tujuan notifikasi background otomatis saat ada pesanan masuk.</p>
-                    </div>
-
-                    <div>
-                        <label class="block text-xs font-bold text-gray-700 mb-1">Fonnte API Token (WA Gateway API)</label>
-                        <input type="password" id="settingFonnteToken" placeholder="Masukkan Token API Fonnte Anda" class="w-full border border-gray-200 p-2.5 text-xs rounded-xl outline-none focus:ring-1 focus:ring-emerald-500">
-                        <p class="text-[10px] text-gray-400 mt-0.5">Kosongkan jika hanya menggunakan wa.me direct link.</p>
-                    </div>
-                </div>
-
-                <button onclick="simpanPengaturan()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl text-xs transition shadow flex items-center justify-center gap-1">
-                    <i data-lucide="save" class="w-4 h-4"></i> Simpan Pengaturan Integrasi
-                </button>
-            </div>
-        </div>
-
-    </div>
-
-    <!-- Modal Edit Harga & Nama Produk Elegan -->
-    <div id="editMenuModal" class="fixed inset-0 bg-black/60 z-50 hidden flex items-center justify-center p-4">
-        <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl animate-fade-in space-y-4">
-            <div class="flex justify-between items-center border-b pb-3">
-                <h3 class="font-extrabold text-sm text-gray-800 flex items-center gap-2">
-                    <i data-lucide="pencil" class="w-4 h-4 text-emerald-600"></i> Edit Produk
+            <!-- Form Tambah Menu & Stok -->
+            <div class="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm space-y-3 md:col-span-2">
+                <h3 class="text-xs font-extrabold text-gray-800 flex items-center gap-2 border-b pb-2">
+                    <i data-lucide="plus-circle" class="w-4 h-4 text-emerald-600"></i> Tambah Menu & Stok Baru
                 </h3>
-                <button onclick="tutupModalEditMenu()" class="text-gray-400 hover:text-gray-600">
-                    <i data-lucide="x" class="w-5 h-5"></i>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                    <input type="text" id="menuNama" placeholder="Nama Menu..." class="border p-2.5 rounded-xl bg-gray-50 outline-none focus:ring-1 focus:ring-emerald-500">
+                    <input type="number" id="menuHarga" placeholder="Harga (Rp)..." class="border p-2.5 rounded-xl bg-gray-50 outline-none focus:ring-1 focus:ring-emerald-500">
+                    <select id="menuKategoriSelect" class="border p-2.5 rounded-xl bg-gray-50 outline-none focus:ring-1 focus:ring-emerald-500"></select>
+                    <input type="number" id="menuStok" placeholder="Jumlah Stok Awal" value="10" class="border p-2.5 rounded-xl bg-gray-50 outline-none focus:ring-1 focus:ring-emerald-500">
+                    <input type="text" id="menuFotoUrl" placeholder="URL Gambar / Foto Menu (opsional)" class="border p-2.5 rounded-xl bg-gray-50 outline-none focus:ring-1 focus:ring-emerald-500 md:col-span-2">
+                </div>
+
+                <button onclick="simpanMenu()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl font-bold text-xs transition">
+                    Simpan Menu Kebadan
                 </button>
             </div>
 
-            <div class="space-y-3">
-                <div>
-                    <label class="block text-xs font-bold text-gray-600 mb-1">Nama Produk</label>
-                    <input type="text" id="editNamaMenuInput" class="w-full border border-gray-200 p-2.5 text-xs rounded-xl outline-none focus:ring-1 focus:ring-emerald-500">
+            <!-- Kelola Kategori -->
+            <div class="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm space-y-3">
+                <h3 class="text-xs font-extrabold text-gray-800 flex items-center gap-2 border-b pb-2">
+                    <i data-lucide="tags" class="w-4 h-4 text-emerald-600"></i> Kelola Kategori
+                </h3>
+                <div class="flex space-x-1">
+                    <input type="text" id="inputKategoriBaru" placeholder="Kategori baru..." class="border p-2 rounded-xl text-xs bg-gray-50 w-full outline-none">
+                    <button onclick="tambahKategori()" class="bg-gray-800 text-white px-3 py-2 rounded-xl text-xs font-bold">+</button>
                 </div>
-                <div>
-                    <label class="block text-xs font-bold text-gray-600 mb-1">Harga Produk (Rp)</label>
-                    <input type="number" id="editHargaMenuInput" class="w-full border border-gray-200 p-2.5 text-xs rounded-xl outline-none focus:ring-1 focus:ring-emerald-500">
-                </div>
-            </div>
-
-            <div class="pt-2 flex space-x-2">
-                <button onclick="tutupModalEditMenu()" class="w-1/2 bg-gray-100 text-gray-600 py-2.5 rounded-xl font-bold text-xs hover:bg-gray-200 transition">
-                    Batal
-                </button>
-                <button onclick="simpanPerubahanMenu()" class="w-1/2 bg-emerald-600 text-white py-2.5 rounded-xl font-bold text-xs shadow hover:bg-emerald-700 transition">
-                    Simpan
-                </button>
+                <div id="categoryList" class="space-y-1.5 max-h-36 overflow-y-auto"></div>
             </div>
         </div>
+
+        <!-- Daftar Menu & Tracking Inventory -->
+        <div class="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm space-y-3">
+            <h3 class="text-xs font-extrabold text-gray-800 flex items-center gap-2 border-b pb-2">
+                <i data-lucide="boxes" class="w-4 h-4 text-emerald-600"></i> Daftar Menu & Stok (Inventory Tracking)
+            </h3>
+            <div id="menuListOwner" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+        </div>
+
+        <!-- Riwayat Transaksi & Struk -->
+        <div class="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm space-y-3">
+            <h3 class="text-xs font-extrabold text-gray-800 flex items-center gap-2 border-b pb-2">
+                <i data-lucide="history" class="w-4 h-4 text-emerald-600"></i> Riwayat Transaksi Penjualan
+            </h3>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="border-b bg-gray-50 text-[11px] font-bold text-gray-500">
+                            <th class="p-3">NO INVOICE</th>
+                            <th class="p-3">PELANGGAN</th>
+                            <th class="p-3">TANGGAL</th>
+                            <th class="p-3">TOTAL</th>
+                            <th class="p-3">STATUS</th>
+                            <th class="p-3 text-right">AKSI</th>
+                        </tr>
+                    </thead>
+                    <tbody id="historyTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Pengaturan Integrasi WA & Fonnte -->
+        <div class="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm space-y-3">
+            <h3 class="text-xs font-extrabold text-gray-800 flex items-center gap-2 border-b pb-2">
+                <i data-lucide="settings" class="w-4 h-4 text-emerald-600"></i> Pengaturan Notifikasi WhatsApp & Fonnte API
+            </h3>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                <div>
+                    <label class="block font-bold text-gray-600 mb-1">Nomor WhatsApp Kasir</label>
+                    <input type="text" id="cfgWaKasir" placeholder="6281234567890" class="w-full border p-2.5 rounded-xl bg-gray-50">
+                </div>
+                <div>
+                    <label class="block font-bold text-gray-600 mb-1">Nomor WhatsApp Owner</label>
+                    <input type="text" id="cfgWaOwner" placeholder="6289876543210" class="w-full border p-2.5 rounded-xl bg-gray-50">
+                </div>
+                <div>
+                    <label class="block font-bold text-gray-600 mb-1">Token API Fonnte (Optional)</label>
+                    <input type="text" id="cfgFonnteToken" placeholder="Token Fonnte..." class="w-full border p-2.5 rounded-xl bg-gray-50">
+                </div>
+            </div>
+            <button onclick="simpanSettings()" class="bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 rounded-xl text-xs font-bold transition">
+                Simpan Pengaturan Integrasi
+            </button>
+        </div>
+
     </div>
 
-    <!-- Custom Modal Pop-up Notice (Elegan) -->
-    <div id="noticeModal" class="fixed inset-0 bg-black/60 z-50 hidden flex items-center justify-center p-4">
-        <div class="bg-white w-full max-w-xs rounded-3xl p-5 text-center shadow-2xl animate-fade-in space-y-2">
-            <div id="noticeIcon"></div>
-            <h3 id="noticeTitle" class="font-extrabold text-base text-gray-800"></h3>
-            <p id="noticeMessage" class="text-xs text-gray-500 leading-relaxed px-2"></p>
-            <div class="pt-3">
-                <button onclick="closeNotice()" class="w-full bg-emerald-600 text-white py-2.5 rounded-xl font-bold text-xs shadow hover:opacity-95 transition">
-                    Mengerti
+    <!-- Modal Cetak Struk (Thermal Receipt) -->
+    <div id="receiptModal" class="fixed inset-0 bg-black/60 z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl space-y-4">
+            <div class="flex justify-between items-center border-b pb-2">
+                <h3 class="font-bold text-xs text-gray-800">Pratinjau Struk Pembayaran</h3>
+                <button onclick="tutupModalStruk()" class="text-gray-400 hover:text-gray-600"><i data-lucide="x" class="w-5 h-5"></i></button>
+            </div>
+
+            <!-- Konten Printable -->
+            <div id="printableReceipt"></div>
+
+            <div class="flex space-x-2 pt-2">
+                <button onclick="tutupModalStruk()" class="w-1/2 bg-gray-100 text-gray-700 py-2 rounded-xl font-bold text-xs">Tutup</button>
+                <button onclick="eksekusiCetak()" class="w-1/2 bg-emerald-600 text-white py-2 rounded-xl font-bold text-xs flex justify-center items-center gap-1.5">
+                    <i data-lucide="printer" class="w-4 h-4"></i> Cetak Struk
                 </button>
             </div>
         </div>

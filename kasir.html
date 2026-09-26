@@ -4,8 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Kasir - Monitor Pesanan Kedai</title>
+    <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
+
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { 
@@ -26,33 +29,160 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
+        // State Aplikasi
+        let allOrders = [];
+        let initialLoadDone = false;
+        let audioEnabled = false;
+        let filterStatus = 'Semua';
+        let filterTime = 'today';
+        let searchQuery = '';
+        let isKdsMode = false;
+
+        // Fungsi Memutar Suara Notifikasi (Web Audio API)
+        function playNotificationSound() {
+            if (!audioEnabled) return;
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+                osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15); // A5
+                
+                gain.gain.setValueAtTime(0.3, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.5);
+                
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                
+                osc.start();
+                osc.stop(ctx.currentTime + 0.5);
+            } catch (e) {
+                console.error("Gagal memutar audio:", e);
+            }
+        }
+
+        // Aktifkan Audio Context oleh Pengguna
+        window.enableAudio = function() {
+            audioEnabled = true;
+            playNotificationSound();
+            document.getElementById('audioBtn').classList.replace('bg-amber-100', 'bg-green-100');
+            document.getElementById('audioBtn').classList.replace('text-amber-700', 'text-green-700');
+            document.getElementById('audioStatusText').innerText = "Notif Suara: Aktif";
+        };
+
+        // Realtime Listener Firestore
         const q = query(collection(db, "orders"), orderBy("createdAt", "desc"));
 
         onSnapshot(q, (snapshot) => {
+            let newlyAddedPending = false;
+
+            allOrders = snapshot.docs.map(docSnap => {
+                const data = docSnap.data();
+                return { id: docSnap.id, ...data };
+            });
+
+            // Deteksi Pesanan Baru ber-status Pending
+            if (initialLoadDone) {
+                snapshot.docChanges().forEach((change) => {
+                    if (change.type === "added") {
+                        const newDoc = change.doc.data();
+                        if (newDoc.status === "Pending") {
+                            newlyAddedPending = true;
+                        }
+                    }
+                });
+
+                if (newlyAddedPending) {
+                    playNotificationSound();
+                }
+            } else {
+                initialLoadDone = true;
+            }
+
+            renderOrders();
+        });
+
+        // Filter Rentang Waktu
+        function filterByTime(createdAtDate) {
+            if (!createdAtDate) return true;
+            const orderDate = createdAtDate.toDate ? createdAtDate.toDate() : new Date(createdAtDate);
+            const now = new Date();
+
+            if (filterTime === 'today') {
+                return orderDate.toDateString() === now.toDateString();
+            } else if (filterTime === '7days') {
+                const diffTime = Math.abs(now - orderDate);
+                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                return diffDays <= 7;
+            } else if (filterTime === 'month') {
+                return orderDate.getMonth() === now.getMonth() && orderDate.getFullYear() === now.getFullYear();
+            }
+            return true; // 'all'
+        }
+
+        // Render Tampilan Utama Pesanan
+        window.renderOrders = function() {
             const container = document.getElementById('orderContainer');
             container.innerHTML = '';
 
-            if(snapshot.empty) {
-                container.innerHTML = `<p class="text-gray-400 text-sm col-span-full text-center py-10">Belum ada pesanan masuk.</p>`;
+            const filtered = allOrders.filter(ord => {
+                // Filter Status
+                const matchStatus = (filterStatus === 'Semua' || ord.status === filterStatus);
+                
+                // Filter Pencarian
+                const invoice = (ord.no_invoice || ord.id).toLowerCase();
+                const nama = (ord.nama_pemesan || '').toLowerCase();
+                const meja = (ord.meja || '').toLowerCase();
+                const matchSearch = invoice.includes(searchQuery) || nama.includes(searchQuery) || meja.includes(searchQuery);
+                
+                // Filter Waktu
+                const matchTime = filterByTime(ord.createdAt);
+
+                return matchStatus && matchSearch && matchTime;
+            });
+
+            if (filtered.length === 0) {
+                container.innerHTML = `
+                    <div class="col-span-full text-center py-12 bg-white rounded-2xl border border-gray-200">
+                        <i data-lucide="inbox" class="w-10 h-10 text-gray-300 mx-auto mb-2"></i>
+                        <p class="text-gray-400 text-xs font-semibold">Tidak ada pesanan yang sesuai filter.</p>
+                    </div>
+                `;
+                lucide.createIcons();
                 return;
             }
 
-            snapshot.forEach((docSnap) => {
-                const data = docSnap.data();
-                const id = docSnap.id;
+            filtered.forEach(data => {
+                const id = data.id;
 
                 let itemsHtml = '';
-                if(data.items) {
+                if (data.items) {
                     data.items.forEach(it => {
-                        itemsHtml += `
-                            <li class="text-xs flex justify-between py-1 border-b border-gray-100 last:border-none">
-                                <div>
-                                    <span class="font-bold text-gray-800">${it.nama} (x${it.jumlah})</span>
-                                    ${it.catatan && it.catatan !== '-' ? `<p class="text-[10px] text-red-500 italic">Ket: ${it.catatan}</p>` : ''}
-                                </div>
-                                <span class="font-semibold text-gray-600">Rp ${Number(it.subtotal).toLocaleString('id-ID')}</span>
-                            </li>
-                        `;
+                        if (isKdsMode) {
+                            // Tampilan khusus Dapur (KDS)
+                            itemsHtml += `
+                                <li class="py-1.5 border-b border-gray-200 last:border-none">
+                                    <div class="flex justify-between items-center">
+                                        <span class="font-extrabold text-sm text-gray-900">${it.nama}</span>
+                                        <span class="font-extrabold text-base bg-emerald-600 text-white px-2 py-0.5 rounded-lg">x${it.jumlah}</span>
+                                    </div>
+                                    ${it.catatan && it.catatan !== '-' ? `<p class="text-xs text-red-600 font-bold mt-0.5 bg-red-50 p-1 rounded">Catatan: ${it.catatan}</p>` : ''}
+                                </li>
+                            `;
+                        } else {
+                            // Tampilan Standar Kasir
+                            itemsHtml += `
+                                <li class="text-xs flex justify-between py-1 border-b border-gray-100 last:border-none">
+                                    <div>
+                                        <span class="font-bold text-gray-800">${it.nama} (x${it.jumlah})</span>
+                                        ${it.catatan && it.catatan !== '-' ? `<p class="text-[10px] text-red-500 italic">Ket: ${it.catatan}</p>` : ''}
+                                    </div>
+                                    <span class="font-semibold text-gray-600">Rp ${Number(it.subtotal).toLocaleString('id-ID')}</span>
+                                </li>
+                            `;
+                        }
                     });
                 }
 
@@ -61,35 +191,96 @@
                 if(data.status === "Selesai") badgeColor = "bg-green-100 text-green-800 border-green-200";
                 if(data.status === "Dibatalkan") badgeColor = "bg-red-100 text-red-800 border-red-200";
 
-                container.innerHTML += `
-                    <div class="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm space-y-3 flex flex-col justify-between">
-                        <div>
-                            <div class="flex justify-between items-start border-b pb-2 mb-2">
-                                <div>
-                                    <h3 class="font-extrabold text-sm text-gray-800">#${data.no_invoice || id}</h3>
-                                    <p class="text-xs font-semibold text-gray-600 mt-0.5">${data.nama_pemesan} • <span class="text-green-600">${data.meja}</span></p>
-                                </div>
-                                <span class="px-2.5 py-1 text-[10px] font-bold rounded-full border ${badgeColor}">${data.status}</span>
-                            </div>
-                            <ul class="space-y-1 bg-gray-50 p-2.5 rounded-xl border border-gray-100">${itemsHtml}</ul>
-                        </div>
-
-                        <div class="pt-2 border-t mt-3 flex items-center justify-between">
+                if (isKdsMode) {
+                    // KARDUS KDS (DAPUR)
+                    container.innerHTML += `
+                        <div class="bg-white border-2 ${data.status === 'Pending' ? 'border-amber-400 bg-amber-50/20' : 'border-gray-200'} rounded-2xl p-4 shadow-sm space-y-3 flex flex-col justify-between">
                             <div>
-                                <p class="text-[10px] text-gray-400">Total Tagihan</p>
-                                <p class="font-extrabold text-sm text-red-600">Rp ${Number(data.total_harga).toLocaleString('id-ID')}</p>
+                                <div class="flex justify-between items-start border-b pb-2 mb-2">
+                                    <div>
+                                        <h3 class="font-extrabold text-base text-gray-900">#${data.no_invoice || id}</h3>
+                                        <p class="text-xs font-bold text-gray-600">${data.nama_pemesan} • <span class="text-emerald-600 font-extrabold">${data.meja}</span></p>
+                                    </div>
+                                    <span class="px-2.5 py-1 text-xs font-bold rounded-full border ${badgeColor}">${data.status}</span>
+                                </div>
+                                <ul class="space-y-1 bg-gray-50 p-3 rounded-xl border border-gray-200">${itemsHtml}</ul>
                             </div>
-                            <div class="flex space-x-1">
-                                <button onclick="updateStatus('${id}', 'Diproses')" class="bg-blue-600 hover:bg-blue-700 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold transition">Proses</button>
-                                <button onclick="updateStatus('${id}', 'Selesai')" class="bg-green-600 hover:bg-green-700 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold transition">Selesai</button>
-                                <button onclick="updateStatus('${id}', 'Dibatalkan')" class="bg-red-500 hover:bg-red-600 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold transition">Batal</button>
+
+                            <div class="pt-2 border-t mt-3 flex justify-end space-x-2">
+                                <button onclick="updateStatus('${id}', 'Diproses')" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition">Proses Dapur</button>
+                                <button onclick="updateStatus('${id}', 'Selesai')" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition">Selesai Masa</button>
                             </div>
                         </div>
-                    </div>
-                `;
+                    `;
+                } else {
+                    // KARDUS KASIR STANDAR
+                    container.innerHTML += `
+                        <div class="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm space-y-3 flex flex-col justify-between">
+                            <div>
+                                <div class="flex justify-between items-start border-b pb-2 mb-2">
+                                    <div>
+                                        <h3 class="font-extrabold text-sm text-gray-800">#${data.no_invoice || id}</h3>
+                                        <p class="text-xs font-semibold text-gray-600 mt-0.5">${data.nama_pemesan} • <span class="text-green-600">${data.meja}</span></p>
+                                    </div>
+                                    <span class="px-2.5 py-1 text-[10px] font-bold rounded-full border ${badgeColor}">${data.status}</span>
+                                </div>
+                                <ul class="space-y-1 bg-gray-50 p-2.5 rounded-xl border border-gray-100">${itemsHtml}</ul>
+                            </div>
+
+                            <div class="pt-2 border-t mt-3 flex items-center justify-between">
+                                <div>
+                                    <p class="text-[10px] text-gray-400">Total Tagihan</p>
+                                    <p class="font-extrabold text-sm text-red-600">Rp ${Number(data.total_harga || 0).toLocaleString('id-ID')}</p>
+                                </div>
+                                <div class="flex space-x-1">
+                                    <button onclick="updateStatus('${id}', 'Diproses')" class="bg-blue-600 hover:bg-blue-700 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold transition">Proses</button>
+                                    <button onclick="updateStatus('${id}', 'Selesai')" class="bg-green-600 hover:bg-green-700 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold transition">Selesai</button>
+                                    <button onclick="updateStatus('${id}', 'Dibatalkan')" class="bg-red-500 hover:bg-red-600 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold transition">Batal</button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
             });
+
             lucide.createIcons();
-        });
+        };
+
+        // Event Handlers untuk Filter UI
+        window.setFilterStatus = function(status) {
+            filterStatus = status;
+            document.querySelectorAll('.btn-filter-status').forEach(btn => {
+                if (btn.dataset.status === status) {
+                    btn.className = "btn-filter-status px-3 py-1.5 text-xs font-bold rounded-xl bg-emerald-600 text-white shadow-sm transition";
+                } else {
+                    btn.className = "btn-filter-status px-3 py-1.5 text-xs font-bold rounded-xl bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 transition";
+                }
+            });
+            renderOrders();
+        };
+
+        window.setFilterTime = function(val) {
+            filterTime = val;
+            renderOrders();
+        };
+
+        window.setSearchQuery = function(val) {
+            searchQuery = val.toLowerCase().trim();
+            renderOrders();
+        };
+
+        window.toggleKdsMode = function() {
+            isKdsMode = !isKdsMode;
+            const btn = document.getElementById('kdsBtn');
+            if (isKdsMode) {
+                btn.className = "px-3 py-1.5 rounded-xl bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm transition";
+                btn.innerHTML = `<i data-lucide="chef-hat" class="w-4 h-4"></i> Mode Dapur: AKTIF`;
+            } else {
+                btn.className = "px-3 py-1.5 rounded-xl bg-gray-100 text-gray-700 text-xs font-bold flex items-center gap-1.5 hover:bg-gray-200 transition";
+                btn.innerHTML = `<i data-lucide="utensils" class="w-4 h-4"></i> Mode Kasir`;
+            }
+            renderOrders();
+        };
 
         window.updateStatus = async function(id, statusBaru) {
             await updateDoc(doc(db, "orders", id), { status: statusBaru });
@@ -97,23 +288,73 @@
     </script>
 </head>
 <body class="bg-gray-100 p-4 font-sans min-h-screen">
-    <header class="max-w-5xl mx-auto flex justify-between items-center mb-6 bg-white p-4 rounded-2xl shadow-sm border border-gray-200">
-        <div class="flex items-center space-x-3">
-            <div class="w-10 h-10 rounded-xl bg-green-100 text-green-700 flex items-center justify-center font-bold">
-                <i data-lucide="monitor" class="w-5 h-5"></i>
+
+    <div class="max-w-5xl mx-auto space-y-4">
+        <!-- Header Utama Kasir -->
+        <header class="flex flex-col md:flex-row justify-between items-start md:items-center gap-3 bg-white p-4 rounded-2xl shadow-sm border border-gray-200">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
+                    <i data-lucide="monitor" class="w-5 h-5"></i>
+                </div>
+                <div>
+                    <h1 class="text-base font-extrabold text-gray-800">Kasir POS - Monitor Pesanan</h1>
+                    <p class="text-xs text-gray-400">Real-time order synchronization</p>
+                </div>
             </div>
-            <div>
-                <h1 class="text-base font-extrabold text-gray-800">Kasir POS - Monitor Pesanan</h1>
-                <p class="text-xs text-gray-400">Real-time order synchronization</p>
+
+            <!-- Kontrol Audio & KDS -->
+            <div class="flex items-center space-x-2 w-full md:w-auto justify-between md:justify-end">
+                <button id="audioBtn" onclick="enableAudio()" class="px-3 py-1.5 rounded-xl bg-amber-100 text-amber-700 text-xs font-bold flex items-center gap-1.5 transition hover:opacity-90">
+                    <i data-lucide="volume-2" class="w-4 h-4"></i>
+                    <span id="audioStatusText">Aktifkan Suara</span>
+                </button>
+
+                <button id="kdsBtn" onclick="toggleKdsMode()" class="px-3 py-1.5 rounded-xl bg-gray-100 text-gray-700 text-xs font-bold flex items-center gap-1.5 hover:bg-gray-200 transition">
+                    <i data-lucide="utensils" class="w-4 h-4"></i> Mode Kasir
+                </button>
+
+                <span class="text-[11px] font-bold bg-green-500 text-white px-2.5 py-1 rounded-full animate-pulse flex items-center gap-1">
+                    ● Live
+                </span>
+            </div>
+        </header>
+
+        <!-- Panel Filter & Pencarian -->
+        <div class="bg-white p-4 rounded-2xl border border-gray-200 shadow-sm space-y-3">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <!-- Search Bar -->
+                <div class="relative md:col-span-2">
+                    <i data-lucide="search" class="w-4 h-4 text-gray-400 absolute left-3 top-3"></i>
+                    <input type="text" oninput="setSearchQuery(this.value)" placeholder="Cari No. Invoice, Nama Pemesan, atau Meja..." class="w-full bg-gray-50 border border-gray-200 text-gray-800 text-xs pl-9 pr-4 py-2.5 rounded-xl outline-none focus:ring-1 focus:ring-emerald-500">
+                </div>
+
+                <!-- Filter Waktu -->
+                <div class="flex items-center space-x-2">
+                    <i data-lucide="calendar" class="w-4 h-4 text-gray-400"></i>
+                    <select onchange="setFilterTime(this.value)" class="w-full bg-gray-50 border border-gray-200 text-xs p-2.5 rounded-xl outline-none font-semibold text-gray-700 focus:ring-1 focus:ring-emerald-500">
+                        <option value="today">Hari Ini</option>
+                        <option value="7days">7 Hari Terakhir</option>
+                        <option value="month">Bulan Ini</option>
+                        <option value="all">Semua Waktu</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Tab Filter Status -->
+            <div class="flex items-center space-x-2 overflow-x-auto no-scrollbar pt-1">
+                <button data-status="Semua" onclick="setFilterStatus('Semua')" class="btn-filter-status px-3 py-1.5 text-xs font-bold rounded-xl bg-emerald-600 text-white shadow-sm transition">Semua</button>
+                <button data-status="Pending" onclick="setFilterStatus('Pending')" class="btn-filter-status px-3 py-1.5 text-xs font-bold rounded-xl bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 transition">Pending</button>
+                <button data-status="Diproses" onclick="setFilterStatus('Diproses')" class="btn-filter-status px-3 py-1.5 text-xs font-bold rounded-xl bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 transition">Diproses</button>
+                <button data-status="Selesai" onclick="setFilterStatus('Selesai')" class="btn-filter-status px-3 py-1.5 text-xs font-bold rounded-xl bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 transition">Selesai</button>
+                <button data-status="Dibatalkan" onclick="setFilterStatus('Dibatalkan')" class="btn-filter-status px-3 py-1.5 text-xs font-bold rounded-xl bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 transition">Dibatalkan</button>
             </div>
         </div>
-        <span class="text-xs font-bold bg-green-500 text-white px-3 py-1 rounded-full animate-pulse flex items-center gap-1">
-            ● Live Connected
-        </span>
-    </header>
 
-    <main class="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="orderContainer">
-        <p class="text-gray-400 text-xs py-10 col-span-full text-center">Memuat transaksi masuk...</p>
-    </main>
+        <!-- Grid Container Pesanan -->
+        <main class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="orderContainer">
+            <p class="text-gray-400 text-xs py-10 col-span-full text-center">Memuat transaksi masuk...</p>
+        </main>
+    </div>
+
 </body>
 </html>
